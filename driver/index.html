@@ -179,6 +179,8 @@
     let currentData = [];
     let map;
     let markers = [];
+    let routePolyline = null; // 경로 선 표시용
+    let carMarker = null; // 실시간 위치 표시용
     let currentUserCourse = null;
 
     // Custom Dialog Wrapper
@@ -228,19 +230,23 @@
 
       document.getElementById('btnStartRoute').addEventListener('click', () => {
         showDialog('배송출발', '코스의 배송을 시작하시겠습니까?\n대기중인 배송처가 모두 배송중으로 변경됩니다.', true, async () => {
-          await api.updateCourseStatus(currentUserCourse, 'delivering');
-          await loadDriverData();
-          
-          // Find first item
-          const pendingItems = currentData.filter(d => d.status !== 'done').sort((a,b) => (a.order||99) - (b.order||99));
-          const firstItem = pendingItems.length > 0 ? pendingItems[0] : null;
+          try {
+            await api.updateCourseStatus(currentUserCourse, 'delivering');
+            await loadDriverData();
+            
+            // 첫 번째 배송지 찾기
+            const pendingItems = currentData.filter(d => d.status !== 'done').sort((a,b) => (a.order||99) - (b.order||99));
+            const firstItem = pendingItems.length > 0 ? pendingItems[0] : null;
 
-          if(firstItem) {
-            // 카카오맵 link/to 기능은 모바일 기기의 '현재 위치'를 출발지로 자동 인식합니다.
-            // 추가 팝업 없이 즉시 실행
-            setTimeout(() => {
+            if(firstItem) {
+              // 즉시 네비게이션 실행
               openNavi(firstItem.name, firstItem.latitude, firstItem.longitude);
-            }, 500);
+            } else {
+              showDialog('알림', '진행할 배송건이 없습니다.');
+            }
+          } catch (e) {
+            console.error(e);
+            showDialog('오류', '데이터 업데이트 중 오류가 발생했습니다.');
           }
         });
       });
@@ -338,6 +344,23 @@
       return url;
     }
 
+    // OSRM을 이용한 실제 도로 경로 좌표 획득 함수
+    async function getRoadPath(points) {
+      if (points.length < 2) return points;
+      try {
+        const coords = points.map(p => `${p[1]},${p[0]}`).join(';');
+        const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.code === 'Ok') {
+          return data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+        }
+      } catch (e) {
+        console.error('OSRM 호출 실패:', e);
+      }
+      return points;
+    }
+
     async function checkNotice() {
       try {
         const userStr = sessionStorage.getItem('authUser');
@@ -369,7 +392,7 @@
       currentData = await api.getDeliveryList(currentUserCourse);
       currentData.sort((a,b) => (a.order || 99) - (b.order || 99));
       renderList();
-      updateMap();
+      await updateMap();
     }
 
     function initMap() {
@@ -377,14 +400,22 @@
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
     }
 
-    function updateMap() {
+    async function updateMap() {
       markers.forEach(m => map.removeLayer(m));
       markers = [];
-      const bounds = [];
+      if (routePolyline) map.removeLayer(routePolyline);
+      if (carMarker) map.removeLayer(carMarker);
       
+      const bounds = [];
+      const rawPoints = []; 
+      
+      const startPoint = [37.5645, 127.2023]; // HQ
+      rawPoints.push(startPoint);
+      bounds.push(startPoint);
+
       currentData.forEach(item => {
         if (item.latitude && item.longitude) {
-          let pinColor = item.status === 'done' ? '#00B894' : '#0984e3';
+          let pinColor = item.status === 'done' ? '#b2bec3' : '#0984e3';
           let orderText = item.order ? item.order : '-';
           const pinIcon = L.divIcon({
             className: 'map-pin',
@@ -394,9 +425,36 @@
           const marker = L.marker([item.latitude, item.longitude], {icon: pinIcon}).addTo(map);
           markers.push(marker);
           bounds.push([item.latitude, item.longitude]);
+          rawPoints.push([item.latitude, item.longitude]);
         }
       });
-      if (bounds.length > 0) map.fitBounds(bounds, { padding: [20, 20] });
+
+      // 실제 도로 경로 선 그리기 (비동기)
+      const roadPoints = await getRoadPath(rawPoints);
+      if (roadPoints.length > 1) {
+        routePolyline = L.polyline(roadPoints, {
+          color: '#0984e3',
+          weight: 7,
+          opacity: 0.7
+        }).addTo(map);
+      }
+
+      // 현재 위치 표시 (마지막 완료 지점)
+      const doneItems = currentData.filter(d => d.status === 'done');
+      let currentPos = startPoint;
+      if(doneItems.length > 0) {
+        const lastDone = doneItems[doneItems.length - 1];
+        currentPos = [lastDone.latitude, lastDone.longitude];
+      }
+
+      const carIcon = L.divIcon({
+        className: 'car-icon',
+        html: `<i class="fa-solid fa-truck" style="color:white; background:var(--primary); padding:6px; border-radius:50%; font-size:18px; border:2px solid white; box-shadow:0 0 15px var(--primary);"></i>`,
+        iconSize: [36, 36], iconAnchor: [18, 18]
+      });
+      carMarker = L.marker(currentPos, {icon: carIcon, zIndexOffset: 1000}).addTo(map);
+
+      if (bounds.length > 0) map.fitBounds(bounds, { padding: [40, 40] });
     }
 
     window.completeDelivery = async function(id) {
@@ -425,7 +483,7 @@
             });
           }
           renderList();
-          updateMap();
+          await updateMap();
         }
       });
     };
@@ -464,23 +522,16 @@
     };
 
     window.openNavi = function(name, lat, lng) {
-      if (navigator.geolocation) {
-        // 기기의 실제 GPS 정보를 강제로 수신하여 출발지로 설정
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            const currentLat = position.coords.latitude;
-            const currentLng = position.coords.longitude;
-            window.open(`https://map.kakao.com/link/from/현재위치,${currentLat},${currentLng}/to/${encodeURIComponent(name)},${lat},${lng}`, '_blank');
-          },
-          (error) => {
-            // GPS 수신 실패/거부 시 기본 도착지만 지정하는 링크로 폴백
-            window.open(`https://map.kakao.com/link/to/${encodeURIComponent(name)},${lat},${lng}`, '_blank');
-          },
-          { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
-        );
-      } else {
-        window.open(`https://map.kakao.com/link/to/${encodeURIComponent(name)},${lat},${lng}`, '_blank');
+      if (!lat || !lng) {
+        alert('목적지 좌표 정보가 없습니다.');
+        return;
       }
+      // 카카오맵 목적지 직접 연결 (모바일 기기에서 앱 전환이 가장 안정적임)
+      const naviUrl = `kakaomap://look?p=${lat},${lng}`;
+      const webUrl = `https://map.kakao.com/link/to/${encodeURIComponent(name)},${lat},${lng}`;
+      
+      // 앱 설치 여부에 관계없이 웹 링크가 범용적이고 안정적임 (팝업 차단 회피를 위해 location.href 사용)
+      location.href = webUrl;
     };
 
     function renderList() {

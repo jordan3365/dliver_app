@@ -3,10 +3,14 @@ import { api } from '../../js/shared/api.js';
 let map;
 let markers = [];
 let currentData = [];
-let routePolyline = null;
-let carMarker = null;
-let simInterval = null;
+let routePolylines = {}; // 코스별 폴리라인
+let carMarkers = {}; // 코스별 차량 마커
+let simIntervals = {}; // 코스별 시뮬레이션 인터벌
 let aiTrafficInterval = null; // AI 교통 실시간 업데이트용
+let dashboardPollingInterval = null; // 자동 동기화용 인터벌
+let isFirstLoad = true; // 첫 로딩 여부 (자동 줌 조절용)
+let livePolylines = []; // 실시간 배송 경로 선
+let liveCarMarkers = []; // 실시간 차량 위치 마커
 let selectedImagesBase64 = []; // 이미지 저장을 위한 배열
 
 const HQ_COORD = { lat: 37.5645, lng: 127.2023 }; // 경기도 하남시 미사대로 550 (현대지식산업센터 한강미사1차)
@@ -49,6 +53,23 @@ function getDirectImageUrl(url) {
     console.error('URL 변환 실패:', e);
   }
   return url;
+}
+
+// OSRM을 이용한 실제 도로 경로 좌표 획득 함수
+async function getRoadPath(points) {
+  if (points.length < 2) return points;
+  try {
+    const coords = points.map(p => `${p[1]},${p[0]}`).join(';');
+    const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.code === 'Ok') {
+      return data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+    }
+  } catch (e) {
+    console.error('OSRM 호출 실패:', e);
+  }
+  return points; // 실패 시 직선 경로 반환
 }
 
 function hexToRgba(hex, alpha) {
@@ -143,7 +164,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('autoRouteBtn').addEventListener('click', executeAutoRouting);
   document.getElementById('manualRouteBtn').addEventListener('click', executeManualRouting);
   document.getElementById('selectAllRoutes').addEventListener('change', handleSelectAll);
-  document.getElementById('refreshBtn').addEventListener('click', loadDashboardData);
+  
+  // 자동 동기화 설정 (10초마다)
+  if(dashboardPollingInterval) clearInterval(dashboardPollingInterval);
+  dashboardPollingInterval = setInterval(() => {
+    if (document.getElementById('view-dashboard').classList.contains('active')) {
+      loadDashboardData();
+    }
+  }, 10000);
   
   // Client Modal Binds
   document.getElementById('addClientBtn').addEventListener('click', openClientModal);
@@ -338,7 +366,7 @@ function initMap() {
 async function loadDashboardData() {
   currentData = await api.getDeliveryList();
   renderDashboardList(currentData);
-  updateMapMarkers(currentData);
+  await updateMapMarkers(currentData);
   updateVehicleStatus(currentData);
   
   if (aiTrafficInterval) clearInterval(aiTrafficInterval);
@@ -402,10 +430,17 @@ function renderDashboardList(data) {
   });
 }
 
-function updateMapMarkers(data) {
+async function updateMapMarkers(data) {
+  // 기존 마커 및 경로 제거
   markers.forEach(m => map.removeLayer(m));
   markers = [];
+  livePolylines.forEach(p => map.removeLayer(p));
+  liveCarMarkers.forEach(m => map.removeLayer(m));
+  livePolylines = [];
+  liveCarMarkers = [];
+
   const bounds = [[HQ_COORD.lat, HQ_COORD.lng]];
+  const coursePaths = {}; // 코스별 경로 좌표 수집
 
   // 코스별 다음 목적지(Next Destination) ID 추출
   const activeData = data.filter(d => d.course !== null && d.status !== 'done');
@@ -422,6 +457,9 @@ function updateMapMarkers(data) {
 
   data.forEach(item => {
     if (item.latitude && item.longitude && item.course) {
+      if(!coursePaths[item.course]) coursePaths[item.course] = [];
+      coursePaths[item.course].push(item);
+
       let baseColor = getCourseColor(item.course);
       let pinColor = item.status === 'done' ? '#b2bec3' : baseColor; 
       let orderText = item.status === 'done' ? '<i class="fa-solid fa-check" style="font-size:12px;"></i>' : (item.order ? item.order : '-');
@@ -449,13 +487,62 @@ function updateMapMarkers(data) {
       markers.push(marker);
       bounds.push([item.latitude, item.longitude]);
 
-      if (isNextDest) {
+      if (isNextDest && isFirstLoad) {
         setTimeout(() => marker.openPopup(), 100);
       }
     }
   });
 
-  if (bounds.length > 1) map.fitBounds(bounds, { padding: [50, 50] });
+  // 코스별 경로 선 및 실시간 차량 위치 표시 (병렬 처리로 속도 향상)
+  const courseKeys = Object.keys(coursePaths);
+  const roadPathPromises = courseKeys.map(async (course) => {
+    const items = coursePaths[course].sort((a,b) => (a.order || 999) - (b.order || 999));
+    const rawPoints = [[HQ_COORD.lat, HQ_COORD.lng]];
+    items.forEach(it => rawPoints.push([it.latitude, it.longitude]));
+    
+    try {
+      const roadPoints = await getRoadPath(rawPoints);
+      return { course, items, roadPoints };
+    } catch (e) {
+      console.error(`${course}호차 경로 로딩 실패:`, e);
+      return { course, items, roadPoints: rawPoints };
+    }
+  });
+
+  const roadPathsResults = await Promise.all(roadPathPromises);
+
+  roadPathsResults.forEach(({ course, items, roadPoints }) => {
+    const color = getCourseColor(course);
+    // 진한 실선으로 표시
+    const poly = L.polyline(roadPoints, {color: color, weight: 6, opacity: 0.7}).addTo(map);
+    livePolylines.push(poly);
+
+    // 차량 위치 추정 (마지막 완료 지점)
+    const doneItems = items.filter(it => it.status === 'done');
+    let carPos = [HQ_COORD.lat, HQ_COORD.lng];
+    if(doneItems.length > 0) {
+      const lastDone = doneItems[doneItems.length - 1];
+      carPos = [lastDone.latitude, lastDone.longitude];
+    }
+
+    const isActive = items.some(it => it.status === 'delivering' || it.status === 'done');
+    const isAllDone = items.length > 0 && items.every(it => it.status === 'done');
+
+    if(isActive && !isAllDone) {
+      const carIcon = L.divIcon({
+        className: 'live-car',
+        html: `<i class="fa-solid fa-truck" style="color:white; background:${color}; padding:6px; border-radius:50%; font-size:16px; border:2px solid white; box-shadow:0 0 15px ${color};"></i>`,
+        iconSize: [32, 32], iconAnchor: [16, 16]
+      });
+      const carMarker = L.marker(carPos, {icon: carIcon, zIndexOffset: 500}).addTo(map);
+      liveCarMarkers.push(carMarker);
+    }
+  });
+
+  if (bounds.length > 1 && isFirstLoad) {
+    map.fitBounds(bounds, { padding: [50, 50] });
+    isFirstLoad = false;
+  }
 }
 
 function updateVehicleStatus(data) {
@@ -467,7 +554,7 @@ function updateVehicleStatus(data) {
   // Update Simulation Course Select
   const simSelect = document.getElementById('simCourse');
   const currentSimValue = simSelect.value;
-  simSelect.innerHTML = '';
+  simSelect.innerHTML = '<option value="all">전체 코스</option>';
 
   courses.forEach(course => {
     // Add to simulation select
@@ -685,104 +772,94 @@ async function executeManualRouting() {
   } catch(e) { alert('할당 중 오류 발생'); }
 }
 
-// OSMR API Route Simulation
+// OSMR API Route Simulation - 다중 차량 동시 시뮬레이션 지원
 async function runSimulation() {
-  const course = document.getElementById('simCourse').value;
+  const selectedCourse = document.getElementById('simCourse').value;
   const simType = document.getElementById('simType').value;
   
-  // 구글 스프레드시트의 배송순번(order)을 절대 기준으로 정렬
-  const courseData = currentData.filter(d => d.course === course).sort((a,b) => (a.order || 999) - (b.order || 999));
-  if (courseData.length === 0) { showAdminDialog('알림', '해당 코스에 할당된 데이터가 없습니다.'); return; }
+  const coursesToSim = selectedCourse === 'all' 
+    ? [...new Set(currentData.filter(d => d.course).map(d => String(d.course)))]
+    : [selectedCourse];
 
-  let coords = [`${HQ_COORD.lng},${HQ_COORD.lat}`]; // Start
-  courseData.forEach(d => coords.push(`${d.longitude},${d.latitude}`));
-  coords.push(`${HQ_COORD.lng},${HQ_COORD.lat}`); // Return to HQ
+  // 기존 시뮬레이션 모두 중단 및 초기화
+  Object.values(simIntervals).forEach(clearInterval);
+  simIntervals = {};
+  Object.values(routePolylines).forEach(p => map.removeLayer(p));
+  routePolylines = {};
+  Object.values(carMarkers).forEach(m => map.removeLayer(m));
+  carMarkers = {};
+  if (window.trafficPolylines) window.trafficPolylines.forEach(p => map.removeLayer(p));
+  window.trafficPolylines = [];
 
   const btn = document.getElementById('startSimBtn');
   btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
   btn.disabled = true;
 
   try {
-    const url = `https://router.project-osrm.org/route/v1/driving/${coords.join(';')}?overview=full&geometries=geojson`;
-    const res = await fetch(url);
-    const data = await res.json();
+    const simPromises = coursesToSim.map(async (course) => {
+      const courseData = currentData.filter(d => String(d.course) === String(course)).sort((a,b) => (a.order || 999) - (b.order || 999));
+      if (courseData.length === 0) return;
 
-    if (data.code === 'Ok') {
-      if (routePolyline) map.removeLayer(routePolyline);
-      if (carMarker) map.removeLayer(carMarker);
-      if (window.trafficPolylines) window.trafficPolylines.forEach(p => map.removeLayer(p));
-      window.trafficPolylines = [];
-      clearInterval(simInterval);
+      let coords = [`${HQ_COORD.lng},${HQ_COORD.lat}`];
+      courseData.forEach(d => coords.push(`${d.longitude},${d.latitude}`));
+      coords.push(`${HQ_COORD.lng},${HQ_COORD.lat}`);
 
-      const routeCoords = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
-      
-      let durationMin = Math.round(data.routes[0].duration / 60);
-      const distKm = (data.routes[0].distance / 1000).toFixed(1);
-      let etaHtml = '';
+      const url = `https://router.project-osrm.org/route/v1/driving/${coords.join(';')}?overview=full&geometries=geojson`;
+      const res = await fetch(url);
+      const data = await res.json();
 
-      if (simType === 'ai_traffic') {
-        // AI 교통상황 시뮬레이션: 체증으로 인한 시간 증가
-        const trafficDelay = Math.round(durationMin * (0.15 + Math.random() * 0.25)); // 15%~40% 체증
-        durationMin += trafficDelay;
+      if (data.code === 'Ok') {
+        const routeCoords = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+        const courseColor = getCourseColor(course);
         
-        etaHtml = `
-          <i class="fa-solid fa-clock"></i> 복귀 예정시간: <span style="font-size:1.1rem;">${durationMin}분</span> 소요<br>
-          <span style="font-size:0.8rem; color:#e17055; font-weight:bold;"><i class="fa-solid fa-triangle-exclamation"></i> 정체 ${trafficDelay}분 추가됨 (AI 실시간 교통 반영)</span><br>
-          <span style="font-size:0.75rem; color:#666;">(총 거리: ${distKm}km / 지정 순번 기준)</span>
-        `;
+        // 경로 표시
+        const poly = L.polyline(routeCoords, {color: courseColor, weight: 5, opacity: 0.6}).addTo(map);
+        routePolylines[course] = poly;
 
-        // 트래픽 폴리라인 (빨강/노랑/초록) 그리기
-        let segmentLength = Math.max(1, Math.floor(routeCoords.length / 15));
-        for (let i = 0; i < routeCoords.length - 1; i += segmentLength) {
-          let chunk = routeCoords.slice(i, i + segmentLength + 1);
-          let rand = Math.random();
-          let color = '#00b894'; // 원활
-          if (rand > 0.85) color = '#d63031'; // 정체
-          else if (rand > 0.6) color = '#fdcb6e'; // 서행
-
-          let p = L.polyline(chunk, {color: color, weight: 6, opacity: 0.9}).addTo(map);
-          window.trafficPolylines.push(p);
+        if (simType === 'ai_traffic') {
+          // 트래픽 가시화 (AI 모드일 때만)
+          let segmentLength = Math.max(1, Math.floor(routeCoords.length / 10));
+          for (let i = 0; i < routeCoords.length - 1; i += segmentLength) {
+            let chunk = routeCoords.slice(i, i + segmentLength + 1);
+            let rand = Math.random();
+            let color = courseColor;
+            if (rand > 0.8) color = '#d63031';
+            let p = L.polyline(chunk, {color: color, weight: 8, opacity: 0.4}).addTo(map);
+            window.trafficPolylines.push(p);
+          }
         }
-      } else {
-        // 일반 지정 순번대로 (파란색 기본 라인)
-        etaHtml = `
-          <i class="fa-solid fa-clock"></i> 복귀 예정시간: ${durationMin}분 소요<br>
-          <span style="font-size:0.8rem; color:#666;">(총 거리: ${distKm}km / 지정 배송순번 기준)</span>
-        `;
-        routePolyline = L.polyline(routeCoords, {color: '#0984e3', weight: 5, opacity: 0.7}).addTo(map);
+
+        // 차량 아이콘
+        const carIcon = L.divIcon({
+          className: 'car-icon',
+          html: `<i class="fa-solid fa-truck-fast" style="color:white; font-size:18px; background:${courseColor}; padding:6px; border-radius:50%; border:2px solid white; box-shadow:0 0 10px rgba(0,0,0,0.3);"></i>`,
+          iconSize: [32, 32], iconAnchor: [16, 16]
+        });
+        const marker = L.marker(routeCoords[0], {icon: carIcon, zIndexOffset: 1000}).addTo(map);
+        carMarkers[course] = marker;
+
+        // 애니메이션 시작
+        let i = 0;
+        simIntervals[course] = setInterval(() => {
+          if (i >= routeCoords.length) {
+            clearInterval(simIntervals[course]);
+            return;
+          }
+          marker.setLatLng(routeCoords[i]);
+          i += 2;
+        }, 50);
       }
+    });
 
-      document.getElementById('etaInfo').innerHTML = `
-        <div style="background-color: #fff3cd; padding: 10px; border-radius: 6px; border-left: 4px solid #ffc107; color: #856404; font-size:0.95rem; font-weight:bold; margin-top:10px;">
-          ${etaHtml}
-        </div>
-      `;
+    await Promise.all(simPromises);
 
-      map.fitBounds(L.latLngBounds(routeCoords), {padding: [50, 50]});
+    // 전체 경로가 보이도록 줌 조정
+    const allCoords = Object.values(routePolylines).flatMap(p => p.getLatLngs());
+    if(allCoords.length > 0) map.fitBounds(L.latLngBounds(allCoords), {padding: [50, 50]});
 
-      // Animate Car
-      const carIcon = L.divIcon({
-        className: 'car-icon',
-        html: `<i class="fa-solid fa-truck-fast" style="color:#2d3436; font-size:24px; background:white; padding:5px; border-radius:50%; border:2px solid #2d3436; box-shadow:0 0 10px rgba(0,0,0,0.3);"></i>`,
-        iconSize: [36, 36], iconAnchor: [18, 18]
-      });
-      carMarker = L.marker(routeCoords[0], {icon: carIcon, zIndexOffset: 1000}).addTo(map);
-      
-      let i = 0;
-      simInterval = setInterval(() => {
-        if (i >= routeCoords.length) {
-          clearInterval(simInterval);
-          return;
-        }
-        carMarker.setLatLng(routeCoords[i]);
-        i += 2; // Speed up animation
-      }, 50);
-
-    } else {
-      showAdminDialog('오류', '경로를 찾을 수 없습니다.');
-    }
   } catch(e) {
-    showAdminDialog('오류', '경로 시뮬레이션 실패');
+    console.error(e);
+    showAdminDialog('오류', '시뮬레이션 실행 중 오류가 발생했습니다.');
   } finally {
     btn.innerHTML = '실행';
     btn.disabled = false;

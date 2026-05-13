@@ -117,6 +117,11 @@
     const btnText = loginBtn.querySelector('.btn-text');
     const loginLoader = document.getElementById('loginLoader');
 
+    // 초기 상태 강제 리셋 (뒤로가기 등 대응)
+    btnText.style.display = 'inline-block';
+    loginLoader.style.display = 'none';
+    loginBtn.disabled = false;
+
     loginForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       
