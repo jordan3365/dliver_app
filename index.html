@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>착한식판 통합 배송관리 시스템 - 로그인</title>
+  <link rel="stylesheet" href="./css/style.css">
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #fdfbfb 0%, #ebedee 100%);
+      background-image: url('https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?q=80&w=2070&auto=format&fit=crop');
+      background-size: cover;
+      background-position: center;
+    }
+    .overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.4);
+      z-index: 0;
+    }
+    .login-container {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 420px;
+      padding: 40px;
+      text-align: center;
+    }
+    .login-header {
+      margin-bottom: 30px;
+    }
+    .login-header h1 {
+      font-size: 1.5rem;
+      color: var(--text-main);
+      margin-top: 15px;
+    }
+    .login-header img {
+      width: 80px;
+      border-radius: 20px;
+      box-shadow: var(--shadow-sm);
+      background: white;
+      padding: 10px;
+    }
+    .form-group {
+      margin-bottom: 20px;
+      text-align: left;
+    }
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 600;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+    .btn-login {
+      width: 100%;
+      margin-top: 10px;
+      font-size: 1.1rem;
+    }
+    .helper-text {
+      margin-top: 25px;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+    .loader {
+      display: none;
+      border: 3px solid #f3f3f3;
+      border-top: 3px solid var(--primary);
+      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="overlay"></div>
+  <div class="login-container glass-panel animate-fade-in">
+    <div class="login-header">
+      <img src="./img/nav_logo.png" alt="착한식판 로고" onerror="this.src='https://via.placeholder.com/80/6C5CE7/FFFFFF?text=Logo'">
+      <h1>통합 배송관리 시스템</h1>
+    </div>
+    <form id="loginForm">
+      <div class="form-group">
+        <label for="username">아이디 (사번)</label>
+        <input type="text" id="username" class="form-control" placeholder="아이디를 입력하세요" required autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label for="password">비밀번호</label>
+        <input type="password" id="password" class="form-control" placeholder="비밀번호를 입력하세요" required autocomplete="current-password">
+      </div>
+      <button type="submit" class="btn-primary btn-login" id="loginBtn">
+        <span class="btn-text">로그인</span>
+        <div class="loader" id="loginLoader"></div>
+      </button>
+    </form>
+    <div class="helper-text">
+      "오늘 하루도 안전운행 하시기 바랍니다."<br>
+      ※ 시스템 문의: 장홍원 010-2681-2665
+    </div>
+  </div>
+
+  <script type="module">
+    import { api } from './js/shared/api.js';
+
+    const loginForm = document.getElementById('loginForm');
+    const loginBtn = document.getElementById('loginBtn');
+    const btnText = loginBtn.querySelector('.btn-text');
+    const loginLoader = document.getElementById('loginLoader');
+
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
+
+      // Loading state
+      btnText.style.display = 'none';
+      loginLoader.style.display = 'block';
+      loginBtn.disabled = true;
+
+      try {
+        const user = await api.login(username, password);
+        
+        // Save to session storage
+        sessionStorage.setItem('authUser', JSON.stringify(user));
+
+        // Redirect based on role
+        if (user.role === 'admin') {
+          window.location.href = './admin/index.html';
+        } else if (user.role === 'driver') {
+          window.location.href = './driver/index.html';
+        }
+
+      } catch (err) {
+        alert(err.message);
+        btnText.style.display = 'inline-block';
+        loginLoader.style.display = 'none';
+        loginBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>관리자 대시보드 - 통합 배송관리</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+  <style>
+    body { display: flex; height: 100vh; overflow: hidden; background-color: #f4f6f9; }
+    /* Sidebar */
+    .sidebar { width: 260px; background: #fff; border-right: 1px solid var(--border-color); display: flex; flex-direction: column; box-shadow: var(--shadow-sm); z-index: 1000; }
+    .sidebar-header { padding: 24px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border-color); }
+    .sidebar-header img { width: 40px; border-radius: 10px; }
+    .sidebar-header h2 { font-size: 1.1rem; margin: 0; color: var(--primary); }
+    .nav-menu { flex: 1; padding: 20px 0; list-style: none; }
+    .nav-item { padding: 12px 24px; display: flex; align-items: center; gap: 12px; color: var(--text-muted); text-decoration: none; font-weight: 500; transition: all 0.2s; cursor: pointer; }
+    .nav-item:hover, .nav-item.active { background: rgba(108, 92, 231, 0.05); color: var(--primary); border-right: 4px solid var(--primary); }
+    .user-info { padding: 24px; border-top: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; }
+    /* Main Content */
+    .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .topbar { height: 70px; background: #fff; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; padding: 0 30px; justify-content: space-between; }
+    .view-section { display: none; height: calc(100vh - 70px); overflow: hidden; padding: 20px; }
+    .view-section.active { display: block; }
+    
+    .dashboard-grid { display: grid; grid-template-columns: 350px 1fr; gap: 20px; height: 100%; }
+    .card { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow-sm); display: flex; flex-direction: column; overflow: hidden; }
+    .card-header { padding: 16px 20px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
+    .card-title { font-size: 1.1rem; font-weight: 700; margin: 0; }
+    .card-body { padding: 20px; overflow-y: auto; flex: 1; }
+    
+    .delivery-list { list-style: none; }
+    .delivery-item { padding: 16px; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 12px; background: #fafbfc; transition: box-shadow 0.2s; cursor: pointer; }
+    .delivery-item:hover { box-shadow: var(--shadow-sm); border-color: var(--primary); }
+    .item-header { display: flex; justify-content: space-between; margin-bottom: 8px; }
+    .badge { padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+    .badge-pending { background: #ffeaa7; color: #d35400; }
+    .badge-delivering { background: #81ecec; color: #00cec9; }
+    .badge-done { background: #55efc4; color: #00b894; }
+
+    #map { width: 100%; height: 100%; background: #e5e3df; z-index: 1;}
+    .map-overlay { position: absolute; top: 20px; right: 20px; background: rgba(255,255,255,0.95); padding: 20px; border-radius: 12px; box-shadow: var(--shadow-md); width: 320px; z-index: 1000; font-size: 1.05rem; border: 1px solid var(--border-color); }
+    .sim-overlay { position: absolute; bottom: 20px; left: 20px; background: rgba(255,255,255,0.95); padding: 15px; border-radius: 8px; box-shadow: var(--shadow-md); z-index: 1000; display:flex; gap: 10px; align-items:center;}
+    
+    .data-table { width: 100%; border-collapse: collapse; }
+    .data-table th, .data-table td { padding: 12px; border-bottom: 1px solid var(--border-color); text-align: left; vertical-align: middle;}
+    .data-table th { background: #f8f9fa; font-weight: 600; color: var(--text-muted); }
+
+    .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 2000; justify-content: center; align-items: center; }
+    .modal-overlay.active { display: flex; }
+    .modal-container { background: white; width: 500px; border-radius: var(--radius); box-shadow: var(--shadow-md); overflow: hidden; animation: fadeIn 0.3s; }
+    .modal-header { padding: 20px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
+    .modal-header h3 { margin: 0; }
+    .modal-close { background: none; border: none; font-size: 1.2rem; cursor: pointer; color: var(--text-muted); }
+    .modal-body { padding: 20px; }
+    .modal-footer { padding: 20px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 10px; background: #fafbfc; }
+    
+    .form-group { margin-bottom: 15px; }
+    .form-group label { display: block; margin-bottom: 6px; font-weight: 600; font-size: 0.9rem; }
+    .form-row { display: flex; gap: 10px; }
+
+    /* Custom Map Pin Marker */
+    .map-pin {
+      position: relative; width: 32px; height: 42px; text-align: center;
+    }
+    .map-pin i { font-size: 32px; text-shadow: 1px 2px 3px rgba(0,0,0,0.4); }
+    .map-pin span {
+      position: absolute; top: 6px; width: 100%; left: 0;
+      color: white; font-weight: 800; font-size: 13px; font-family: sans-serif;
+      text-align: center; text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+    }
+    
+    @keyframes pinBlink {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.3; transform: scale(1.15); filter: drop-shadow(0 0 8px rgba(255,255,255,0.5)); }
+    }
+    .pin-next i { animation: pinBlink 1s infinite; }
+
+    /* Map Fullscreen */
+    .map-container.fullscreen {
+      position: fixed !important;
+      top: 0 !important;
+      left: 0 !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      z-index: 9999 !important;
+      margin: 0 !important;
+      border-radius: 0 !important;
+    }
+
+    /* Toast Notification */
+    #toastContainer {
+      position: fixed; top: 20px; right: 20px; z-index: 3000; display: flex; flex-direction: column; gap: 10px;
+    }
+    .toast {
+      background: var(--primary); color: white; padding: 15px 25px; border-radius: 8px;
+      box-shadow: var(--shadow-md); font-weight: 600; display: flex; align-items: center; gap: 10px;
+      animation: slideInRight 0.3s ease;
+    }
+    @keyframes slideInRight { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+    /* Notice Editor */
+    #noticeEditor {
+      min-height: 200px;
+      padding: 15px;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      background: white;
+      overflow-y: auto;
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+    #noticeEditor:focus { outline: 2px solid var(--primary); }
+    #noticeEditor img { max-width: 100%; border-radius: 8px; margin: 10px 0; }
+  </style>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <img src="../img/nav_logo.png" onerror="this.src='https://via.placeholder.com/40/6C5CE7/FFFFFF?text=Logo'">
+      <h2>착한식판-TMS</h2>
+    </div>
+    <div class="nav-menu" id="navMenu">
+      <a class="nav-item active" data-target="dashboard"><i class="fa-solid fa-chart-line"></i> 대시보드</a>
+      <a class="nav-item" data-target="routing"><i class="fa-solid fa-map-location-dot"></i> 경로 자동할당</a>
+      <a class="nav-item" data-target="notice"><i class="fa-solid fa-bullhorn"></i> 공지사항 관리</a>
+      <a class="nav-item" data-target="clients"><i class="fa-solid fa-users"></i> 거래처 관리</a>
+      <a class="nav-item" data-target="drivers"><i class="fa-solid fa-id-card"></i> 기사 관리</a>
+    </div>
+    <div class="user-info">
+      <div>
+        <strong style="display:block;" id="adminName">관리자</strong>
+        <span style="font-size:0.8rem;color:var(--text-muted);">Admin</span>
+      </div>
+      <a href="#" id="logoutBtn" style="color:var(--danger);"><i class="fa-solid fa-power-off"></i></a>
+    </div>
+  </aside>
+
+  <main class="main-content">
+    <header class="topbar">
+      <h3 id="topbarTitle">대시보드</h3>
+      <div>
+        <button class="btn-primary" id="refreshBtn" style="padding: 8px 16px; font-size: 0.9rem;"><i class="fa-solid fa-rotate"></i> 동기화</button>
+      </div>
+    </header>
+
+    <!-- 대시보드 뷰 -->
+    <section id="view-dashboard" class="view-section active">
+      <div class="dashboard-grid">
+        <div class="card" style="height: 100%;">
+          <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+            <h4 class="card-title">오늘의 배송 현황</h4>
+            <button class="btn-primary" id="resetAllStatusBtn" style="background-color: var(--danger); padding: 5px 12px; font-size: 0.85rem;"><i class="fa-solid fa-rotate-left"></i> 전체 초기화</button>
+          </div>
+          <div class="card-body" style="padding: 15px;">
+            <ul class="delivery-list" id="deliveryList">
+              <div style="text-align:center; padding: 20px;"><i class="fa-solid fa-spinner fa-spin"></i> 로딩중...</div>
+            </ul>
+          </div>
+        </div>
+        <div class="card map-container" style="position: relative;">
+          <button id="btnFullscreenMap" style="position: absolute; top: 12px; left: 60px; z-index: 1000; background: white; color: #333; border: 2px solid rgba(0,0,0,0.2); border-radius: 4px; padding: 5px 12px; cursor: pointer; font-family: 'Pretendard', sans-serif; font-size: 0.85rem; font-weight: bold; transition: background 0.2s;">
+            <i class="fa-solid fa-expand"></i> 전체화면
+          </button>
+          <div id="map"></div>
+          <div class="map-overlay">
+            <h5><i class="fa-solid fa-satellite-dish" style="color:var(--danger);"></i> 차량 관제 요약</h5>
+            <hr style="margin: 10px 0; border:0; border-top:1px solid #ddd;">
+            <div id="vehicleStatus">로딩중...</div>
+            <div id="etaInfo" style="margin-top:10px; font-size:0.85rem; color:var(--primary); font-weight:bold;"></div>
+          </div>
+          <!-- Simulation Controls -->
+          <div class="sim-overlay">
+            <span style="font-size:0.9rem; font-weight:600;"><i class="fa-solid fa-route"></i> 시뮬레이션:</span>
+            <select id="simCourse" class="form-control" style="width:auto; padding:6px; font-size:0.85rem;">
+              <option value="1">1호차</option>
+              <option value="2">2호차</option>
+            </select>
+            <select id="simType" class="form-control" style="width:auto; padding:6px; font-size:0.85rem; font-weight:600;">
+              <option value="order">지정된 배송순번 기준</option>
+              <option value="ai_traffic">AI 실시간 교통상황 반영</option>
+            </select>
+            <button class="btn-primary" id="startSimBtn" style="padding: 6px 12px; font-size: 0.85rem;">실행</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 경로 자동할당 뷰 -->
+    <section id="view-routing" class="view-section">
+      <div class="card" style="height: 100%;">
+        <div class="card-header">
+          <h4 class="card-title">미할당 배송처 경로 설정</h4>
+          <div style="display:flex; gap:10px; align-items:center;">
+            <select id="manualDriverSelect" class="form-control" style="width:120px; padding:6px; font-size:0.85rem;">
+              <option value="">기사 선택</option>
+              <!-- JS에서 채움 -->
+            </select>
+            <button class="btn-primary" id="manualRouteBtn" style="padding: 6px 12px; font-size: 0.85rem; background: var(--secondary);">수동 할당</button>
+            <span style="border-left:1px solid #ddd; height:20px; margin:0 5px;"></span>
+            <button class="btn-primary" id="autoRouteBtn" style="padding: 6px 12px; font-size: 0.85rem;">선택항목 자동 할당 (최적화)</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th style="width: 50px;"><input type="checkbox" id="selectAllRoutes"></th>
+                <th>ID</th><th>배송처명</th><th>주소</th><th>상태</th>
+              </tr>
+            </thead>
+            <tbody id="routingTableBody">
+              <tr><td colspan="5" style="text-align:center;">준비중입니다...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 공지사항 관리 뷰 -->
+    <section id="view-notice" class="view-section">
+      <div class="card" style="height: 100%;">
+        <div class="card-header">
+          <h4 class="card-title">기사 공지사항 등록</h4>
+        </div>
+        <div class="card-body">
+          <div class="form-group" style="margin-bottom: 20px;">
+            <label style="font-weight: 600; color: var(--text-main);">공지 대상 선택</label>
+            <select id="noticeTarget" class="form-control" style="max-width: 300px; margin-top: 5px;">
+              <option value="global">📢 전체 공지사항</option>
+              <option value="1">🚚 1호차 전용 공지</option>
+              <option value="2">🚚 2호차 전용 공지</option>
+              <option value="3">🚚 3호차 전용 공지</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label style="font-size: 1.1rem; color: var(--primary); font-weight: 600;">공지사항 내용 (이미지 붙여넣기 가능)</label>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">글자를 입력하거나 이미지를 복사(Ctrl+V)해서 붙여넣을 수 있습니다.</p>
+            <div id="noticeEditor" contenteditable="true" placeholder="공지사항 내용을 입력하세요..."></div>
+          </div>
+          <div style="margin-top: 20px; display: flex; justify-content: flex-end; gap: 10px;">
+            <button class="btn-primary" id="deleteNoticeBtn" style="background-color: var(--danger); padding: 12px 25px;"><i class="fa-solid fa-trash-can"></i> 삭제</button>
+            <button class="btn-primary" id="saveNoticeBtn" style="padding: 12px 30px;"><i class="fa-solid fa-paper-plane"></i> 공지사항 저장 및 즉시 전송</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 거래처 관리 뷰 -->
+    <section id="view-clients" class="view-section">
+      <div class="card" style="height: 100%;">
+        <div class="card-header">
+          <h4 class="card-title">거래처 목록</h4>
+          <div style="display:flex; gap:10px;">
+            <!-- 엑셀 업로드 숨김 버튼 -->
+            <input type="file" id="excelUploadInput" accept=".xlsx, .xls" style="display:none;">
+            <button class="btn-primary" id="downloadExcelTemplateBtn" style="padding: 6px 12px; font-size: 0.85rem; background: var(--warning); color: #000;"><i class="fa-solid fa-download"></i> 템플릿 다운로드</button>
+            <button class="btn-primary" id="uploadExcelBtn" style="padding: 6px 12px; font-size: 0.85rem; background: var(--success);"><i class="fa-solid fa-file-excel"></i> 엑셀 대량업로드</button>
+            <button class="btn-primary" id="addClientBtn" style="padding: 6px 12px; font-size: 0.85rem;"><i class="fa-solid fa-plus"></i> 개별 등록</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <table class="data-table">
+            <thead><tr><th>ID</th><th>배송처명</th><th>주소</th><th>연락처</th><th>메모</th><th>관리</th></tr></thead>
+            <tbody id="clientsTableBody">
+               <tr><td colspan="6" style="text-align:center;">데이터를 불러오는 중...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 기사 관리 뷰 -->
+    <section id="view-drivers" class="view-section">
+      <div class="card" style="height: 100%;">
+        <div class="card-header">
+          <h4 class="card-title">기사 관리</h4>
+          <button class="btn-primary" id="addDriverBtn" style="padding: 6px 12px; font-size: 0.85rem;"><i class="fa-solid fa-plus"></i> 기사 등록</button>
+        </div>
+        <div class="card-body">
+          <table class="data-table">
+            <thead><tr><th>ID</th><th>기사명</th><th>아이디</th><th>코스</th><th>연락처</th></tr></thead>
+            <tbody id="driversTableBody">
+               <tr><td colspan="5" style="text-align:center;">데이터를 불러오는 중...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- 거래처 등록/수정 모달 -->
+  <div class="modal-overlay" id="clientModal">
+    <div class="modal-container">
+      <div class="modal-header">
+        <h3 id="clientModalTitle">신규 거래처 등록</h3>
+        <button class="modal-close" id="closeClientModal"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <form id="clientForm">
+          <input type="hidden" id="editClientId" value="">
+          <div class="form-group">
+            <label>배송처명 *</label>
+            <input type="text" id="clientName" class="form-control" required>
+          </div>
+          <div class="form-group">
+            <label>연락처</label>
+            <input type="text" id="clientPhone" class="form-control" placeholder="02-000-0000">
+          </div>
+          <div class="form-group">
+            <label>주소 검색 *</label>
+            <div class="form-row">
+              <input type="text" id="clientAddress1" class="form-control" readonly required placeholder="우측 버튼 클릭">
+              <button type="button" class="btn-primary" id="searchAddressBtn" style="white-space:nowrap; border-radius: 8px;">주소찾기</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>상세 주소</label>
+            <input type="text" id="clientAddress2" class="form-control" placeholder="상세주소 입력">
+          </div>
+          <div class="form-row" style="margin-bottom:15px;">
+            <div style="flex:1;"><label style="font-size:0.8rem; color:var(--text-muted);">자동 변환 위도</label><input type="text" id="clientLat" class="form-control" readonly style="background:#f0f0f0; padding:8px;"></div>
+            <div style="flex:1;"><label style="font-size:0.8rem; color:var(--text-muted);">자동 변환 경도</label><input type="text" id="clientLng" class="form-control" readonly style="background:#f0f0f0; padding:8px;"></div>
+          </div>
+          <div class="form-row" style="margin-bottom:15px;">
+            <div style="flex:1;"><label>할당코스</label><input type="text" id="clientCourse" class="form-control" placeholder="예: 1 (미할당시 비움)"></div>
+            <div style="flex:1;"><label>배송순번</label><input type="number" id="clientOrder" class="form-control" placeholder="예: 1 (미할당시 비움)"></div>
+          </div>
+          <div class="form-group">
+            <label>수량 및 메모</label>
+            <div class="form-row">
+              <input type="number" id="clientBoxCount" class="form-control" placeholder="박스 수량" style="width:100px;" value="1">
+              <input type="text" id="clientMemo" class="form-control" placeholder="배송 메모 (예: 문 앞)">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>배송처 이미지 (최대 6장)</label>
+            <input type="file" id="clientImages" class="form-control" accept="image/*" multiple>
+            <div id="imagePreviewContainer" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;"></div>
+            <p style="font-size:0.75rem; color:var(--text-muted); margin-top:5px;">※ 이미지를 선택하면 미리보기가 표시됩니다.</p>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary" style="background:var(--text-muted);" id="cancelClientModal">취소</button>
+        <button class="btn-primary" id="saveClientBtn">저장하기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 기사 등록 모달 -->
+  <div class="modal-overlay" id="driverModal">
+    <div class="modal-container">
+      <div class="modal-header">
+        <h3>신규 기사 등록</h3>
+        <button class="modal-close" id="closeDriverModal"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <form id="driverForm">
+          <div class="form-group"><label>기사 이름 *</label><input type="text" id="driverName" class="form-control" required></div>
+          <div class="form-group"><label>로그인 아이디 *</label><input type="text" id="driverUsername" class="form-control" required></div>
+          <div class="form-group"><label>할당 코스 (숫자) *</label><input type="number" id="driverCourse" class="form-control" required></div>
+          <div class="form-group"><label>연락처</label><input type="text" id="driverPhone" class="form-control" placeholder="010-0000-0000"></div>
+          <p style="font-size:0.8rem; color:var(--danger);">※ 비밀번호는 초기 '1111' 로 일괄 설정됩니다.</p>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary" style="background:var(--text-muted);" id="cancelDriverModal">취소</button>
+        <button class="btn-primary" id="saveDriverBtn">등록하기</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toastContainer"></div>
+
+  <!-- Admin Custom Alert/Confirm Modal -->
+  <div class="modal-overlay" id="adminDialogModal" style="z-index: 4000;">
+    <div class="modal-container" style="width: 400px;">
+      <div class="modal-header">
+        <h3 id="adminDialogTitle">알림</h3>
+      </div>
+      <div class="modal-body" id="adminDialogMsg" style="line-height:1.5; font-size:1rem; padding: 25px 20px;"></div>
+      <div class="modal-footer">
+        <button class="btn-primary" style="background:var(--text-muted); display:none;" id="adminDialogCancel">취소</button>
+        <button class="btn-primary" id="adminDialogConfirm">확인</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Excel, Postcode, Leaflet -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="//t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
