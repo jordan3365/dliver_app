@@ -210,6 +210,11 @@
     }
 
     document.addEventListener('DOMContentLoaded', async () => {
+      // 초기 GPS 권한 요청 (사전 동의)
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(() => {}, () => {}, {timeout: 5000});
+      }
+      
       const userStr = sessionStorage.getItem('authUser');
       if (!userStr) { window.location.href = '../index.html'; return; }
       const user = JSON.parse(userStr);
@@ -224,8 +229,9 @@
         showDialog('알림', '배송 데이터가 최신으로 갱신되었습니다.');
       });
       
-      document.getElementById('btnAck').addEventListener('click', () => {
-        showDialog('알림', '배송 리스트를 확인 및 인지하였습니다.');
+      document.getElementById('btnAck').addEventListener('click', async () => {
+        await loadDriverData();
+        showDialog('알림', '실시간 배송 경로와 데이터를 확인하였습니다.');
       });
 
       document.getElementById('btnStartRoute').addEventListener('click', () => {
@@ -409,7 +415,7 @@
       const bounds = [];
       const rawPoints = []; 
       
-      const startPoint = [37.5645, 127.2023]; // HQ
+      const startPoint = [37.556898, 127.206401]; // HQ (하남시 덕풍동 833-1)
       rawPoints.push(startPoint);
       bounds.push(startPoint);
 
@@ -434,8 +440,8 @@
       if (roadPoints.length > 1) {
         routePolyline = L.polyline(roadPoints, {
           color: '#0984e3',
-          weight: 7,
-          opacity: 0.7
+          weight: 10,
+          opacity: 0.8
         }).addTo(map);
       }
 
@@ -479,7 +485,7 @@
             api.sendAdminNotification(`[알림] ${user.name} 기사님 (코스 ${user.course}) 모든 배송을 완료하고 복귀합니다.`);
 
             showDialog('수고하셨습니다!', '모든 배송이 완료되었습니다.\n본사(하남)로 복귀하는 네비게이션을 실행합니다.', true, () => {
-              openNavi('착한식판 본사(복귀)', 37.5615, 127.2285);
+              openNavi('착한식판 본사(복귀)', 37.556898, 127.206401);
             });
           }
           renderList();
@@ -526,12 +532,27 @@
         alert('목적지 좌표 정보가 없습니다.');
         return;
       }
-      // 카카오맵 목적지 직접 연결 (모바일 기기에서 앱 전환이 가장 안정적임)
-      const naviUrl = `kakaomap://look?p=${lat},${lng}`;
-      const webUrl = `https://map.kakao.com/link/to/${encodeURIComponent(name)},${lat},${lng}`;
       
-      // 앱 설치 여부에 관계없이 웹 링크가 범용적이고 안정적임 (팝업 차단 회피를 위해 location.href 사용)
-      location.href = webUrl;
+      const encodeName = encodeURIComponent(name);
+      // 카카오내비 앱 직접 실행 스킴
+      const appUrl = `kakaomap://route?ep=${lat},${lng}&by=CAR`;
+      // 웹 길안내 URL (새 창으로 열어 복귀 용이하게 처리)
+      const webUrl = `https://map.kakao.com/link/to/${encodeName},${lat},${lng}`;
+
+      // 앱 실행 시도 (모바일 기기 전용)
+      if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+          // 앱 실행 시도 후 실패 시 웹으로 자동 전환
+          const startTime = Date.now();
+          setTimeout(function() {
+              if (Date.now() - startTime < 1500) {
+                  window.open(webUrl, '_blank');
+              }
+          }, 1000);
+          location.href = appUrl;
+      } else {
+          // PC 환경 등에서는 바로 웹으로 실행
+          window.open(webUrl, '_blank');
+      }
     };
 
     function renderList() {

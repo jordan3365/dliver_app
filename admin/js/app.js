@@ -13,7 +13,7 @@ let livePolylines = []; // 실시간 배송 경로 선
 let liveCarMarkers = []; // 실시간 차량 위치 마커
 let selectedImagesBase64 = []; // 이미지 저장을 위한 배열
 
-const HQ_COORD = { lat: 37.5645, lng: 127.2023 }; // 경기도 하남시 미사대로 550 (현대지식산업센터 한강미사1차)
+const HQ_COORD = { lat: 37.556898, lng: 127.206401 }; // 경기도 하남시 덕풍동 833-1 (현대지식산업센터 한강미사)
 
 const COURSE_COLORS = {
   "1": "#e17055", // Red Orange
@@ -360,7 +360,7 @@ function initMap() {
     iconSize: [35, 45], iconAnchor: [17, 45], popupAnchor: [0, -45]
   });
   L.marker([HQ_COORD.lat, HQ_COORD.lng], {icon: hqIcon}).addTo(map)
-   .bindPopup('<b>착한식판 본사</b><br>경기도 하남시 미사대로 550 (출발지/도착지)');
+   .bindPopup('<b>착한식판 본사</b><br>경기도 하남시 덕풍동 833-1 (출발지/도착지)');
 }
 
 async function loadDashboardData() {
