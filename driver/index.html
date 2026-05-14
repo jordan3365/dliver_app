@@ -235,8 +235,29 @@
       });
 
       document.getElementById('btnStartRoute').addEventListener('click', () => {
-        showDialog('배송출발', '코스의 배송을 시작하시겠습니까?\n대기중인 배송처가 모두 배송중으로 변경됩니다.', true, async () => {
+        const totalCount = currentData.length;
+        const totalBox = currentData.reduce((acc, cur) => acc + (parseInt(cur.boxCount) || 0), 0);
+        const totalTime = totalCount * 15; // 1건당 평균 15분 가정
+        const hours = Math.floor(totalTime / 60);
+        const mins = totalTime % 60;
+        const timeStr = hours > 0 ? `${hours}시간 ${mins}분` : `${mins}분`;
+
+        const summaryHtml = `
+          <div style="text-align:left; background:#f8f9fa; padding:15px; border-radius:10px; border-left:5px solid var(--primary);">
+            <p style="margin-bottom:8px;">📊 <strong>금일 배송 요약</strong></p>
+            <p>• 총 배송처: <span style="color:var(--primary); font-weight:bold;">${totalCount}건</span></p>
+            <p>• 총 배송박스: <span style="color:var(--secondary); font-weight:bold;">${totalBox}박스</span></p>
+            <p>• 예상 소요시간: <span style="color:var(--danger); font-weight:bold;">약 ${timeStr}</span></p>
+          </div>
+          <p style="margin-top:15px; font-weight:600; text-align:center;">배송을 시작하시겠습니까?</p>
+        `;
+
+        showDialog('배송 출발 확인', summaryHtml, true, async () => {
           try {
+            const btn = document.getElementById('btnStartRoute');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 처리중';
+
             await api.updateCourseStatus(currentUserCourse, 'delivering');
             await loadDriverData();
             
@@ -245,14 +266,23 @@
             const firstItem = pendingItems.length > 0 ? pendingItems[0] : null;
 
             if(firstItem) {
+              // 지도 줌인 처리
+              map.setView([firstItem.latitude, firstItem.longitude], 18);
+              
               // 즉시 네비게이션 실행
-              openNavi(firstItem.name, firstItem.latitude, firstItem.longitude);
+              setTimeout(() => {
+                openNavi(firstItem.name, firstItem.latitude, firstItem.longitude);
+              }, 800);
             } else {
               showDialog('알림', '진행할 배송건이 없습니다.');
             }
           } catch (e) {
             console.error(e);
             showDialog('오류', '데이터 업데이트 중 오류가 발생했습니다.');
+          } finally {
+            const btn = document.getElementById('btnStartRoute');
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa-solid fa-truck-fast"></i> 배송출발';
           }
         });
       });
@@ -504,9 +534,11 @@
       if(!item) return;
 
       let imagesHtml = '';
-      if(item.deliveryPlaceImages && item.deliveryPlaceImages.length > 0) {
+      const imgData = item.deliveryPlaceImages;
+      if(imgData && (Array.isArray(imgData) ? imgData.length > 0 : true)) {
+        const images = Array.isArray(imgData) ? imgData : [imgData];
         imagesHtml = '<div style="margin-top:15px; font-weight:bold; color:var(--primary);">현장 이미지</div><div class="detail-images">';
-        item.deliveryPlaceImages.forEach(src => {
+        images.forEach(src => {
           const directSrc = getDirectImageUrl(src);
           imagesHtml += `<img src="${directSrc}" alt="배송처 이미지" onclick="viewImage('${directSrc}')" style="cursor:pointer; box-shadow:0 2px 4px rgba(0,0,0,0.1);">`;
         });

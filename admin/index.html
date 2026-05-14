@@ -112,7 +112,42 @@
       line-height: 1.6;
     }
     #noticeEditor:focus { outline: 2px solid var(--primary); }
-    #noticeEditor img { max-width: 100%; border-radius: 8px; margin: 10px 0; }
+    #noticeEditor img, .notice-preview-img { 
+      max-width: 100%; 
+      height: auto; 
+      object-fit: contain;
+      border-radius: 8px; 
+      margin: 5px 0; 
+      display: block;
+    }
+    .data-table td .notice-content-preview {
+      max-height: 100px;
+      overflow-y: auto;
+      font-size: 0.85rem;
+      line-height: 1.4;
+    }
+
+    /* HQ Arrival Alert Traffic Light Animation */
+    @keyframes trafficBlink {
+      0% { border-color: #ff7675; box-shadow: 0 0 20px #ff7675; } /* Red */
+      33% { border-color: #fdcb6e; box-shadow: 0 0 20px #fdcb6e; } /* Yellow */
+      66% { border-color: #00b894; box-shadow: 0 0 20px #00b894; } /* Green */
+      100% { border-color: #ff7675; box-shadow: 0 0 20px #ff7675; }
+    }
+    .traffic-blink {
+      animation: trafficBlink 2s infinite;
+      border-width: 5px !important;
+      border-style: solid !important;
+    }
+    .traffic-blink .modal-header {
+      animation: trafficHeaderBlink 2s infinite;
+    }
+    @keyframes trafficHeaderBlink {
+      0% { background-color: #ff7675; }
+      33% { background-color: #fdcb6e; }
+      66% { background-color: #00b894; }
+      100% { background-color: #ff7675; }
+    }
   </style>
 </head>
 <body>
@@ -221,28 +256,56 @@
 
     <!-- 공지사항 관리 뷰 -->
     <section id="view-notice" class="view-section">
-      <div class="card" style="height: 100%;">
-        <div class="card-header">
-          <h4 class="card-title">기사 공지사항 등록</h4>
+      <div class="dashboard-grid" style="grid-template-columns: 450px 1fr;">
+        <!-- 공지사항 등록 폼 -->
+        <div class="card">
+          <div class="card-header">
+            <h4 class="card-title">기사 공지사항 등록</h4>
+          </div>
+          <div class="card-body">
+            <div class="form-group" style="margin-bottom: 15px;">
+              <label style="font-weight: 600; color: var(--text-main);">공지 대상 선택</label>
+              <select id="noticeTarget" class="form-control" style="margin-top: 5px;">
+                <option value="global">📢 전체 공지사항</option>
+                <option value="1">🚚 1호차 전용 공지</option>
+                <option value="2">🚚 2호차 전용 공지</option>
+                <option value="3">🚚 3호차 전용 공지</option>
+                <option value="4">🚚 4호차 전용 공지</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label style="font-size: 1rem; color: var(--primary); font-weight: 600;">공지 내용 (이미지 붙여넣기 가능)</label>
+              <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 10px;">Ctrl+V로 이미지를 붙여넣을 수 있습니다.</p>
+              <div id="noticeEditor" contenteditable="true" placeholder="공지사항 내용을 입력하세요..." style="min-height: 250px; max-height: 400px; overflow-y: auto;"></div>
+            </div>
+            <div style="margin-top: 15px; display: flex; flex-direction: column; gap: 8px;">
+              <button class="btn-primary" id="saveNoticeBtn" style="width: 100%; padding: 12px;"><i class="fa-solid fa-paper-plane"></i> 공지사항 저장 및 전송</button>
+              <button class="btn-primary" id="deleteNoticeBtn" style="width: 100%; background-color: var(--danger); padding: 10px; font-size: 0.9rem;"><i class="fa-solid fa-trash-can"></i> 선택된 공지 삭제</button>
+            </div>
+          </div>
         </div>
-        <div class="card-body">
-          <div class="form-group" style="margin-bottom: 20px;">
-            <label style="font-weight: 600; color: var(--text-main);">공지 대상 선택</label>
-            <select id="noticeTarget" class="form-control" style="max-width: 300px; margin-top: 5px;">
-              <option value="global">📢 전체 공지사항</option>
-              <option value="1">🚚 1호차 전용 공지</option>
-              <option value="2">🚚 2호차 전용 공지</option>
-              <option value="3">🚚 3호차 전용 공지</option>
-            </select>
+
+        <!-- 공지사항 목록 테이블 -->
+        <div class="card">
+          <div class="card-header">
+            <h4 class="card-title">현재 등록된 공지 목록</h4>
           </div>
-          <div class="form-group">
-            <label style="font-size: 1.1rem; color: var(--primary); font-weight: 600;">공지사항 내용 (이미지 붙여넣기 가능)</label>
-            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">글자를 입력하거나 이미지를 복사(Ctrl+V)해서 붙여넣을 수 있습니다.</p>
-            <div id="noticeEditor" contenteditable="true" placeholder="공지사항 내용을 입력하세요..."></div>
-          </div>
-          <div style="margin-top: 20px; display: flex; justify-content: flex-end; gap: 10px;">
-            <button class="btn-primary" id="deleteNoticeBtn" style="background-color: var(--danger); padding: 12px 25px;"><i class="fa-solid fa-trash-can"></i> 삭제</button>
-            <button class="btn-primary" id="saveNoticeBtn" style="padding: 12px 30px;"><i class="fa-solid fa-paper-plane"></i> 공지사항 저장 및 즉시 전송</button>
+          <div class="card-body" style="padding: 0;">
+            <div style="overflow-x: auto;">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th style="width: 120px;">공지대상</th>
+                    <th>공지내용 (미리보기)</th>
+                    <th style="width: 150px;">등록일시</th>
+                    <th style="width: 80px;">관리</th>
+                  </tr>
+                </thead>
+                <tbody id="noticeTableBody">
+                  <tr><td colspan="4" style="text-align:center; padding: 30px;">공지사항을 불러오는 중...</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
@@ -374,6 +437,22 @@
   </div>
 
   <div id="toastContainer"></div>
+
+  <!-- HQ 도착 예정 알림 모달 -->
+  <div class="modal-overlay" id="arrivalAlertModal" style="z-index: 5000;">
+    <div class="modal-container traffic-blink" style="width: 450px;">
+      <div class="modal-header" style="color: white;">
+        <h3 id="arrivalAlertTitle"><i class="fa-solid fa-truck-ramp-box"></i> 차량 HQ 도착 예정</h3>
+        <button class="modal-close" id="closeArrivalAlertModal" style="color:white;"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body" id="arrivalAlertBody" style="text-align: center; padding: 30px 20px;">
+        <!-- 내용 동적 생성 -->
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary" id="confirmArrivalAlert" style="width:100%;">확인</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Admin Custom Alert/Confirm Modal -->
   <div class="modal-overlay" id="adminDialogModal" style="z-index: 4000;">

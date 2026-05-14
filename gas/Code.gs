@@ -210,7 +210,9 @@ function assignRoutes(payload) {
 
 // 구글 드라이브 이미지 업로드 헬퍼
 function uploadImagesToDrive(images, placeId, placeName) {
-  if (!images || images.length === 0) return [];
+  if (!images) return [];
+  if (!Array.isArray(images)) images = [images];
+  if (images.length === 0) return [];
   const folderId = "1nPwkhHh2AhrfWJs2uR01j4LoUGpS3Kd2";
   const folder = DriveApp.getFolderById(folderId);
   let savedUrls = [];

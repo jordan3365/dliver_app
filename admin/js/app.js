@@ -12,6 +12,8 @@ let isFirstLoad = true; // 첫 로딩 여부 (자동 줌 조절용)
 let livePolylines = []; // 실시간 배송 경로 선
 let liveCarMarkers = []; // 실시간 차량 위치 마커
 let selectedImagesBase64 = []; // 이미지 저장을 위한 배열
+let alertedArrivals = new Set(); // HQ 도착 알림이 뜬 코스 저장
+let prevNextDestIds = new Set(); // 이전 목적지 ID 저장
 
 const HQ_COORD = { lat: 37.556898, lng: 127.206401 }; // 경기도 하남시 덕풍동 833-1 (현대지식산업센터 한강미사)
 
@@ -254,35 +256,31 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 타겟 변경 시 기존 공지 불러오기
   noticeTarget.addEventListener('change', async () => {
-    noticeEditor.innerHTML = '<div style="text-align:center; padding:20px;"><i class="fa-solid fa-spinner fa-spin"></i> 로딩중...</div>';
-    try {
-      const notices = await api.getNotices();
-      const current = notices.find(n => String(n.target) === String(noticeTarget.value));
-      noticeEditor.innerHTML = current ? current.content : '';
-    } catch(e) {
-      noticeEditor.innerHTML = '';
-    }
+    const notices = await api.getNotices();
+    const current = notices.find(n => String(n.target) === String(noticeTarget.value));
+    noticeEditor.innerHTML = current ? current.content : '';
   });
 
   document.getElementById('saveNoticeBtn').addEventListener('click', async () => {
     const target = noticeTarget.value;
     const content = noticeEditor.innerHTML;
     
-    // 이미지 추출 (Base64)
+    // 이미지 추출 (Base64 및 기존 URL 포함)
     const imgs = noticeEditor.querySelectorAll('img');
-    const imagesBase64 = Array.from(imgs).map(img => img.src).filter(src => src.startsWith('data:image'));
+    const images = Array.from(imgs).map(img => img.src); // 모든 이미지 URL/Base64 수집
 
     document.getElementById('saveNoticeBtn').disabled = true;
     document.getElementById('saveNoticeBtn').innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 처리 중...';
     
     try {
-      await api.saveNotice(target, content, imagesBase64);
+      await api.saveNotice(target, content, images);
       showAdminDialog('저장 완료', '공지사항이 성공적으로 저장 및 전송되었습니다.');
+      renderNoticeView(); // 목록 갱신
     } catch(e) {
       showAdminDialog('오류', '공지사항 저장에 실패했습니다.');
     } finally {
       document.getElementById('saveNoticeBtn').disabled = false;
-      document.getElementById('saveNoticeBtn').innerHTML = '<i class="fa-solid fa-paper-plane"></i> 공지사항 저장 및 즉시 전송';
+      document.getElementById('saveNoticeBtn').innerHTML = '<i class="fa-solid fa-paper-plane"></i> 공지사항 저장 및 전송';
     }
   });
 
@@ -293,6 +291,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         await api.deleteNotice(target);
         noticeEditor.innerHTML = '';
         showAdminDialog('삭제 완료', '공지사항이 성공적으로 삭제되었습니다.');
+        renderNoticeView(); // 목록 갱신
       } catch(e) {
         showAdminDialog('오류', '공지 삭제에 실패했습니다.');
       }
@@ -308,6 +307,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         btn.disabled = true;
         await api.resetAllDeliveryStatus();
         api.sendAdminNotification('배송 상태가 전체 초기화되었습니다.');
+        alertedArrivals.clear(); // 알림 상태 초기화
         await loadDashboardData();
         showAdminDialog('초기화 완료', '모든 배송 데이터가 "대기중" 상태로 초기화되었습니다.');
       } catch(e) {
@@ -319,6 +319,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
   });
+
+  // HQ Arrival Alert Modal Binds
+  document.getElementById('closeArrivalAlertModal').addEventListener('click', () => document.getElementById('arrivalAlertModal').classList.remove('active'));
+  document.getElementById('confirmArrivalAlert').addEventListener('click', () => document.getElementById('arrivalAlertModal').classList.remove('active'));
 
   // Map Fullscreen Toggle
   const btnFullscreen = document.getElementById('btnFullscreenMap');
@@ -455,6 +459,9 @@ async function updateMapMarkers(data) {
     }
   });
 
+  // 새로 추가된 목적지 (배송 완료 후 다음 목적지로 이동 시)
+  const newlyAddedDestIds = [...nextDestIds].filter(id => !prevNextDestIds.has(id));
+
   data.forEach(item => {
     if (item.latitude && item.longitude && item.course) {
       if(!coursePaths[item.course]) coursePaths[item.course] = [];
@@ -487,7 +494,7 @@ async function updateMapMarkers(data) {
       markers.push(marker);
       bounds.push([item.latitude, item.longitude]);
 
-      if (isNextDest && isFirstLoad) {
+      if (isNextDest && (isFirstLoad || newlyAddedDestIds.includes(item.id))) {
         setTimeout(() => marker.openPopup(), 100);
       }
     }
@@ -543,6 +550,9 @@ async function updateMapMarkers(data) {
     map.fitBounds(bounds, { padding: [50, 50] });
     isFirstLoad = false;
   }
+  
+  // 목적지 상태 업데이트
+  prevNextDestIds = nextDestIds;
 }
 
 function updateVehicleStatus(data) {
@@ -576,15 +586,34 @@ function updateVehicleStatus(data) {
     const traffic = getAiTrafficStatus(course);
     let trafficHtml = '';
     
-    if (done === total && total > 0) {
-      trafficHtml = `<div style="margin-top:8px; padding:8px; background: rgba(0,0,0,0.03); border-radius:4px; text-align:center; color:#00b894; font-size:0.85rem; font-weight:bold;"><i class="fa-solid fa-check-circle"></i> 배송 완료 (본사 복귀중)</div>`;
-    } else if (total > 0) {
-      const baseMin = remaining * 15; // 남은 건당 15분 가정
-      const totalMin = baseMin + traffic.delay;
-      let now = new Date();
-      now.setMinutes(now.getMinutes() + totalMin);
-      let etaTime = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
+    // 남은 시간 계산 (배송중이거나 복귀중일 때)
+    const baseMin = remaining * 15; // 남은 건당 15분 가정
+    const totalMin = baseMin + (remaining === 0 ? 10 : traffic.delay); // 복귀 시 기본 10분 추가
+    let now = new Date();
+    now.setMinutes(now.getMinutes() + totalMin);
+    let etaTime = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
 
+    // 15분 전 알림 체크 (모든 배송 완료 후 본사 복귀 중일 때만)
+    const isReturning = (done === total && total > 0);
+    if (isReturning && totalMin <= 15 && totalMin > 0 && !alertedArrivals.has(course)) {
+      showArrivalAlert(course, etaTime);
+      alertedArrivals.add(course);
+    }
+    // 운행 시작 전이거나 알림 범위에서 벗어나면 상태 초기화
+    if (done === 0 || totalMin > 20) {
+      alertedArrivals.delete(course);
+    }
+
+    if (done === total && total > 0) {
+      trafficHtml = `
+        <div style="margin-top:8px; padding:8px; background: rgba(0,184,148,0.1); border: 1px solid #00b894; border-radius:6px; font-size:0.85rem;">
+          <div style="display:flex; justify-content:space-between; color:#00b894; align-items:center;">
+            <span><i class="fa-solid fa-check-circle"></i> 배송 완료 (HQ 복귀중)</span>
+            <strong style="font-size:1.1rem;">${etaTime} 도착예정</strong>
+          </div>
+        </div>
+      `;
+    } else if (total > 0) {
       trafficHtml = `
         <div style="margin-top:8px; padding:8px; background: #fff; border: 1px solid #eee; border-radius:6px; font-size:0.85rem;">
           <div style="display:flex; justify-content:space-between; margin-bottom:6px; border-bottom:1px dashed #eee; padding-bottom:4px;">
@@ -627,21 +656,110 @@ function updateVehicleStatus(data) {
   statusEl.innerHTML = html || '운행 중인 차량이 없습니다.';
 }
 
+function showArrivalAlert(course, eta) {
+  const modal = document.getElementById('arrivalAlertModal');
+  const body = document.getElementById('arrivalAlertBody');
+  const courseColor = getCourseColor(course);
+  
+  body.innerHTML = `
+    <div style="font-size: 1.5rem; font-weight: 800; margin-bottom: 20px; color: var(--text-main);">
+      <span style="color:${courseColor}; text-shadow: 0 0 10px ${hexToRgba(courseColor, 0.3)};">${course}호차</span>가 곧 HQ에 도착합니다!
+    </div>
+    <div style="background: #f8f9fa; padding: 20px; border-radius: 12px; border: 1px solid #eee;">
+      <div style="font-size: 1.1rem; color: var(--text-muted); margin-bottom: 5px;">예상 도착 시간</div>
+      <div style="font-size: 3rem; font-weight: 900; color: var(--primary); letter-spacing: -1px;">${eta}</div>
+    </div>
+    <div style="margin-top: 25px; color: #d63031; font-weight: 600; font-size: 0.95rem;">
+      <i class="fa-solid fa-triangle-exclamation"></i> 하역 준비 및 다음 업무를 준비해주세요.
+    </div>
+  `;
+  
+  modal.classList.add('active');
+  
+  // 브라우저 알림 (권한 있을 경우)
+  if (Notification.permission === "granted") {
+    new Notification(`차량 도착 알림 - ${course}호차`, {
+      body: `${eta}경 HQ 도착 예정입니다.`,
+      icon: '../img/nav_logo.png'
+    });
+  }
+}
+
 
 // ---------------- NOTICE ----------------
 async function renderNoticeView() {
-  const target = document.getElementById('noticeTarget').value;
-  const editor = document.getElementById('noticeEditor');
-  editor.innerHTML = '<div style="text-align:center; padding:20px;"><i class="fa-solid fa-spinner fa-spin"></i> 로딩중...</div>';
+  const tableBody = document.getElementById('noticeTableBody');
+  if(!tableBody) return;
+  
+  tableBody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding: 20px;"><i class="fa-solid fa-spinner fa-spin"></i> 로딩중...</td></tr>';
   
   try {
     const notices = await api.getNotices();
-    const current = notices.find(n => String(n.target) === String(target));
-    editor.innerHTML = current ? current.content : '';
+    tableBody.innerHTML = '';
+    
+    if (!notices || !Array.isArray(notices) || notices.length === 0) {
+      tableBody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding: 20px;">등록된 공지사항이 없습니다.</td></tr>';
+    } else {
+      // 최신순 정렬 (날짜가 없을 경우 대비)
+      notices.sort((a,b) => {
+        const dateA = a.date ? new Date(a.date) : new Date(0);
+        const dateB = b.date ? new Date(b.date) : new Date(0);
+        return dateB - dateA;
+      });
+      
+      notices.forEach(notice => {
+        const tr = document.createElement('tr');
+        const targetLabel = notice.target === 'global' ? '📢 전체 공지' : `🚚 ${notice.target}호차`;
+        const dateStr = notice.date ? new Date(notice.date).toLocaleString() : '-';
+        
+        // 이미지 태그들에 클래스 추가하여 반응형 대응 (내용이 없을 경우 대비)
+        let contentHtml = notice.content || '';
+        if (contentHtml.includes('<img ')) {
+          contentHtml = contentHtml.replace(/<img /g, '<img class="notice-preview-img" ');
+        }
+
+        tr.innerHTML = `
+          <td><strong>${targetLabel}</strong></td>
+          <td><div class="notice-content-preview">${contentHtml}</div></td>
+          <td><small>${dateStr}</small></td>
+          <td style="text-align:center;">
+            <button class="btn-primary" style="padding:6px 12px; font-size:0.8rem;" onclick="loadNoticeToEditor('${notice.target}')">수정</button>
+          </td>
+        `;
+        tableBody.appendChild(tr);
+      });
+    }
+
+    // 에디터 초기화 (현재 선택된 타겟 기준)
+    const targetSelect = document.getElementById('noticeTarget');
+    const editor = document.getElementById('noticeEditor');
+    if (targetSelect && editor) {
+      const target = targetSelect.value;
+      const current = Array.isArray(notices) ? notices.find(n => String(n.target) === String(target)) : null;
+      editor.innerHTML = current ? current.content : '';
+    }
+
   } catch(e) {
-    editor.innerHTML = '';
+    console.error("renderNoticeView 에러:", e);
+    if (tableBody) tableBody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--danger); padding:20px;">데이터를 불러오지 못했습니다.</td></tr>';
   }
 }
+
+// 테이블에서 수정 버튼 클릭 시 에디터로 로드
+window.loadNoticeToEditor = function(target) {
+  const targetSelect = document.getElementById('noticeTarget');
+  const editor = document.getElementById('noticeEditor');
+  if (targetSelect) targetSelect.value = target;
+  
+  // 에디터 내용을 해당 타겟 공지로 변경
+  api.getNotices().then(notices => {
+    if (Array.isArray(notices) && editor) {
+      const current = notices.find(n => String(n.target) === String(target));
+      editor.innerHTML = current ? current.content : '';
+      editor.focus();
+    }
+  }).catch(err => console.error("loadNoticeToEditor 에러:", err));
+};
 
 // ---------------- ROUTING & SIMULATION ----------------
 async function renderRoutingView() {
@@ -790,6 +908,9 @@ async function runSimulation() {
   carMarkers = {};
   if (window.trafficPolylines) window.trafficPolylines.forEach(p => map.removeLayer(p));
   window.trafficPolylines = [];
+  
+  // 시뮬레이션 알림 상태 초기화
+  coursesToSim.forEach(c => alertedArrivals.delete(c + '_sim'));
 
   const btn = document.getElementById('startSimBtn');
   btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
@@ -846,6 +967,15 @@ async function runSimulation() {
             return;
           }
           marker.setLatLng(routeCoords[i]);
+          
+          // 시뮬레이션 중 HQ 도착 알림 (마지막 지점 근처일 때)
+          const distToHQ = getDist(routeCoords[i][0], routeCoords[i][1], HQ_COORD.lat, HQ_COORD.lng);
+          // 시뮬레이션 상에서는 약 2km 이내를 15분 전으로 가정 (가시성 위해 조정 가능)
+          if (i > routeCoords.length * 0.7 && distToHQ < 2.0 && !alertedArrivals.has(course + '_sim')) {
+            showArrivalAlert(course, '시뮬레이션 도착 예정');
+            alertedArrivals.add(course + '_sim');
+          }
+
           i += 2;
         }, 50);
       }
@@ -965,13 +1095,32 @@ window.openEditClientModal = function(id) {
   
   const container = document.getElementById('imagePreviewContainer');
   container.innerHTML = '';
-  selectedImagesBase64 = item.deliveryPlaceImages ? [...item.deliveryPlaceImages] : [];
+  
+  // 이미지가 문자열로 들어올 경우를 대비해 배열로 변환하여 처리
+  const imgData = item.deliveryPlaceImages;
+  selectedImagesBase64 = Array.isArray(imgData) ? [...imgData] : (imgData ? [imgData] : []);
   
   selectedImagesBase64.forEach(src => {
+    const wrap = document.createElement('div');
+    wrap.style = "position:relative;";
+    
     const img = document.createElement('img');
     img.src = getDirectImageUrl(src);
     img.style = "width: 60px; height: 60px; object-fit: cover; border-radius: 4px; border: 1px solid #ddd;";
-    container.appendChild(img);
+    
+    const delBtn = document.createElement('button');
+    delBtn.innerHTML = '×';
+    delBtn.style = "position:absolute; top:-5px; right:-5px; background:red; color:white; border:none; border-radius:50%; width:18px; height:18px; font-size:12px; cursor:pointer;";
+    delBtn.onclick = (event) => {
+      event.preventDefault();
+      const idx = selectedImagesBase64.indexOf(src);
+      if(idx > -1) selectedImagesBase64.splice(idx, 1);
+      wrap.remove();
+    };
+    
+    wrap.appendChild(img);
+    wrap.appendChild(delBtn);
+    container.appendChild(wrap);
   });
 
   document.getElementById('clientModal').classList.add('active');
@@ -981,15 +1130,14 @@ function closeClientModal() { document.getElementById('clientModal').classList.r
 
 function handleImagePreview(e) {
   const files = Array.from(e.target.files);
-  if (files.length > 6) {
+  const container = document.getElementById('imagePreviewContainer');
+  
+  // 기존 이미지는 유지하고 새로 추가하는 방식으로 변경
+  if (selectedImagesBase64.length + files.length > 6) {
     alert('최대 6장까지만 업로드 가능합니다.');
     e.target.value = '';
     return;
   }
-  
-  const container = document.getElementById('imagePreviewContainer');
-  container.innerHTML = '';
-  selectedImagesBase64 = [];
 
   files.forEach(file => {
     const reader = new FileReader();
@@ -999,7 +1147,23 @@ function handleImagePreview(e) {
       const img = document.createElement('img');
       img.src = base64;
       img.style = "width: 60px; height: 60px; object-fit: cover; border-radius: 4px; border: 1px solid #ddd;";
-      container.appendChild(img);
+      
+      // 삭제 버튼 추가 (기능 편의성)
+      const wrap = document.createElement('div');
+      wrap.style = "position:relative;";
+      const delBtn = document.createElement('button');
+      delBtn.innerHTML = '×';
+      delBtn.style = "position:absolute; top:-5px; right:-5px; background:red; color:white; border:none; border-radius:50%; width:18px; height:18px; font-size:12px; cursor:pointer;";
+      delBtn.onclick = (event) => {
+        event.preventDefault();
+        const idx = selectedImagesBase64.indexOf(base64);
+        if(idx > -1) selectedImagesBase64.splice(idx, 1);
+        wrap.remove();
+      };
+      
+      wrap.appendChild(img);
+      wrap.appendChild(delBtn);
+      container.appendChild(wrap);
     };
     reader.readAsDataURL(file);
   });

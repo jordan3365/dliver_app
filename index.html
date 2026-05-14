@@ -117,10 +117,19 @@
     const btnText = loginBtn.querySelector('.btn-text');
     const loginLoader = document.getElementById('loginLoader');
 
-    // 초기 상태 강제 리셋 (뒤로가기 등 대응)
-    btnText.style.display = 'inline-block';
-    loginLoader.style.display = 'none';
-    loginBtn.disabled = false;
+    const resetLoginUI = () => {
+      btnText.style.display = 'inline-block';
+      loginLoader.style.display = 'none';
+      loginBtn.disabled = false;
+    };
+
+    // 초기 상태 강제 리셋
+    resetLoginUI();
+
+    // bfcache 대응 (뒤로가기 또는 로그아웃 후 복귀 시 상태 초기화)
+    window.addEventListener('pageshow', () => {
+      resetLoginUI();
+    });
 
     loginForm.addEventListener('submit', async (e) => {
       e.preventDefault();
