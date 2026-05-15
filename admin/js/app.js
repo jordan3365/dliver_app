@@ -425,16 +425,8 @@ async function loadDashboardData() {
     if (document.getElementById('view-clients').classList.contains('active')) renderClientsView();
     if (document.getElementById('view-drivers').classList.contains('active')) renderDriversView();
   } catch (error) {
-    console.error('데이터 로딩 중 오류:', error);
-    const listEl = document.getElementById('deliveryList');
-    if (listEl) {
-      listEl.innerHTML = `<li style="text-align:center; color:var(--danger); padding:20px;">
-        <i class="fa-solid fa-triangle-exclamation"></i> 데이터 로딩 실패<br>
-        <small style="display:block; margin-top:5px; color:#999;">${error.message || '네트워크 상태를 확인해주세요.'}</small>
-      </li>`;
-    }
-    const statusEl = document.getElementById('vehicleStatus');
-    if (statusEl) statusEl.innerHTML = '<div style="text-align:center; color:var(--danger); padding:10px;">데이터를 불러올 수 없습니다.</div>';
+    console.warn('데이터 업데이트 지연 (일시적 오류):', error.message);
+    // 에러 발생 시 UI를 덮어쓰지 않고 기존 상태를 유지 (사용자에게 에러 메시지 미노출)
   }
 }
 
@@ -876,7 +868,40 @@ function showArrivalAlert(course, eta) {
       icon: '../img/nav_logo.png'
     });
   }
+
+  // 상단 종 아이콘 배지 업데이트
+  updateBellBadge(1);
 }
+
+let notificationCount = 0;
+function updateBellBadge(increment) {
+  const badge = document.getElementById('bellBadge');
+  if (!badge) return;
+  notificationCount += increment;
+  if (notificationCount > 0) {
+    badge.textContent = notificationCount > 99 ? '99+' : notificationCount;
+    badge.style.display = 'block';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+// 종 아이콘 클릭 시 알림 카운트 초기화
+document.addEventListener('DOMContentLoaded', () => {
+  const bell = document.getElementById('adminBell');
+  if (bell) {
+    bell.addEventListener('click', () => {
+      notificationCount = 0;
+      updateBellBadge(0);
+      // 알림 스택으로 시각적 효과 부여
+      const stack = document.getElementById('arrivalAlertStack');
+      if (stack && stack.firstChild) {
+        stack.firstChild.style.boxShadow = '0 0 20px var(--primary)';
+        setTimeout(() => { if(stack.firstChild) stack.firstChild.style.boxShadow = ''; }, 2000);
+      }
+    });
+  }
+});
 
 
 // ---------------- NOTICE ----------------

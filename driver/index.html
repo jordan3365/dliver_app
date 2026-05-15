@@ -219,7 +219,11 @@
         navigator.geolocation.getCurrentPosition(() => {}, () => {}, {timeout: 5000});
       }
       
-      const userStr = localStorage.getItem('authUser');
+      let userStr = localStorage.getItem('authUser');
+      if (!userStr) { 
+        // 일시적인 지연 가능성을 고려하여 재확인 시도
+        userStr = localStorage.getItem('authUser');
+      }
       if (!userStr) { window.location.href = '../index.html'; return; }
       const user = JSON.parse(userStr);
       if (user.role !== 'driver') { window.location.href = '../index.html'; return; }
@@ -712,21 +716,21 @@
         const isActive = (item.id === firstActiveId);
 
         const card = document.createElement('div');
+        let isExcluded = item.status === 'excluded';
         let cardClass = '';
         if (item.status === 'done') cardClass = 'done';
         else if (item.status === 'delivering') cardClass = 'delivering';
+        else if (isExcluded) {
+            cardClass = 'excluded';
+        }
         
+        card.className = `delivery-card animate-fade-in ${cardClass} ${isActive && !isExcluded ? 'active-route' : ''}`;
+        if(isExcluded) card.style.opacity = '0.5';
+
         let statusText = '대기중';
         if(item.status === 'done') statusText = '완료';
         else if(item.status === 'delivering') statusText = '배송중';
-        else if(item.status === 'excluded') {
-            statusText = '배송제외';
-            cardClass = 'excluded';
-        }
-
-        const isExcluded = item.status === 'excluded';
-        card.className = `delivery-card animate-fade-in ${cardClass} ${isActive && !isExcluded ? 'active-route' : ''}`;
-        if(isExcluded) card.style.opacity = '0.5';
+        else if(isExcluded) statusText = '배송제외';
 
         card.innerHTML = `
           <div class="card-header">
@@ -793,11 +797,15 @@
     requestWakeLock();
     initApp();
 
-    // 실시간 공지/취소 및 배송 데이터 체크 (10초 주기)
+    // 실시간 공지/취소 및 배송 데이터 체크 (5초 주기)
     setInterval(async () => {
-      await checkNotice();
-      await loadDriverData();
-    }, 10000);
+      try {
+        await checkNotice();
+        await loadDriverData();
+      } catch (e) {
+        console.warn('실시간 업데이트 지연:', e);
+      }
+    }, 5000);
   </script>
 </body>
 </html>
