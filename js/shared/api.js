@@ -43,7 +43,8 @@ class ApiService {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 30000); // 30초로 연장
 
-        const response = await fetch(GAS_WEB_APP_URL, {
+        const url = GAS_WEB_APP_URL + (GAS_WEB_APP_URL.includes('?') ? '&' : '?') + 't=' + Date.now();
+        const response = await fetch(url, {
           method: 'POST',
           mode: 'cors',
           redirect: 'follow',

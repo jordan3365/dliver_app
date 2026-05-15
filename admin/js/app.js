@@ -544,7 +544,7 @@ async function updateMapMarkers(data, drivers = []) {
       
       let classNames = 'map-pin';
       let isNextDest = nextDestIds.has(item.id);
-      if (isNextDest) classNames += ' pin-next';
+      if (isNextDest) classNames += ' pin-next pin-pulse';
 
       const pinIcon = L.divIcon({
         className: classNames,
@@ -761,14 +761,19 @@ function updateVehicleStatus(data, drivers = []) {
           <span>완료: <b>${done}</b> / ${total}건</span>
           <span style="color:var(--text-muted); font-size:0.85rem; font-weight:600;">${progressPct}%</span>
         </div>
+        <div style="display:flex; gap:5px; margin-top:8px;">
+          <button onclick="adminSendMessage('${course}', '${driver.name}')" style="flex:1; padding:6px; font-size:0.8rem; background:#f1f2f6; border:1px solid #ddd; border-radius:4px; cursor:pointer; color:#57606f;">
+            <i class="fa-solid fa-paper-plane"></i> 메시지 전송
+          </button>
+          ${statusText === '운행 전' && total > 0 ? `
+            <button onclick="adminStartCourse('${course}')" style="flex:1; padding:6px; font-size:0.8rem; background:var(--primary); color:white; border:none; border-radius:4px; cursor:pointer;">
+              <i class="fa-solid fa-play"></i> 출발 시키기
+            </button>
+          ` : ''}
+        </div>
         <div style="width:100%; background:#e9ecef; height:6px; border-radius:3px; margin-top:8px; overflow:hidden;">
           <div style="width:${progressPct}%; background:${cColor}; height:100%; transition: width 0.5s ease;"></div>
         </div>
-        ${statusText === '운행 전' && total > 0 ? `
-          <button onclick="adminStartCourse('${course}')" style="width:100%; margin-top:10px; padding:8px; background:var(--primary); color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold;">
-            <i class="fa-solid fa-play"></i> 배송 출발 시키기
-          </button>
-        ` : ''}
         ${trafficHtml}
       </div>
     `;
@@ -806,6 +811,17 @@ async function autoResetSystem() {
     setTimeout(() => { isAutoResetting = false; }, 300000); // 5분간 재작동 방지
   }
 }
+
+window.adminSendMessage = async function(course, driverName) {
+  const msg = prompt(`[${course}호차 ${driverName} 기사님]에게 보낼 메시지를 입력하세요.`);
+  if (!msg) return;
+  try {
+    await api.saveNotice(course, `<strong>[관리자 지시사항]</strong><br>${msg}`, []);
+    showToast(`${course}호차로 메시지를 전송했습니다.`);
+  } catch(e) {
+    alert('메시지 전송 실패');
+  }
+};
 
 window.adminStartCourse = async function(course) {
   if(!confirm(`코스 ${course}의 배송을 시작 처리하시겠습니까?`)) return;

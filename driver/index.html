@@ -84,7 +84,10 @@
   <header class="mobile-header">
     <div class="header-top">
       <div class="header-title" id="driverTitle">기사용 배송앱</div>
-      <i class="fa-solid fa-bell"></i>
+      <div id="driverBell" style="position:relative; cursor:pointer; font-size:1.2rem;">
+        <i class="fa-solid fa-bell"></i>
+        <span id="bellBadge" style="position:absolute; top:-5px; right:-8px; background:var(--danger); color:white; font-size:0.65rem; padding:2px 5px; border-radius:10px; display:none; font-weight:bold; border:1px solid white;">0</span>
+      </div>
     </div>
     <div style="font-size: 0.9rem; opacity: 0.9;">오늘의 배송 진행률 <span id="progressText">0/0</span></div>
     <div class="progress-container"><div class="progress-bar" id="progressBar"></div></div>
@@ -503,6 +506,16 @@
       return points;
     }
 
+    // TTS 음성 안내 함수
+    function speak(text) {
+      if (!window.speechSynthesis) return;
+      window.speechSynthesis.cancel(); // 이전 음성 중단
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'ko-KR';
+      utterance.rate = 1.0;
+      window.speechSynthesis.speak(utterance);
+    }
+
     async function checkNotice() {
       try {
         const userStr = localStorage.getItem('authUser');
@@ -512,7 +525,6 @@
         const notices = await api.getNotices();
         if (!notices || notices.length === 0) return;
 
-        // 전체 공지 + 해당 코스 전용 공지 필터링
         const relevantNotices = notices.filter(n => 
           String(n.target) === 'global' || String(n.target) === String(user.course)
         );
@@ -524,7 +536,13 @@
             showDialog(title, notice.content);
             sessionStorage.setItem(storageKey, 'true');
             
-            // 배송취소 알림인 경우 데이터 즉시 새로고침
+            // 배지 업데이트
+            updateDriverBadge(1);
+            
+            // 공지사항 음성 안내
+            const plainText = notice.content.replace(/<[^>]*>/g, '');
+            speak(`새로운 메시지가 도착했습니다. ${plainText}`);
+
             if (notice.content.includes('배송취소')) {
               await loadDriverData();
             }
@@ -535,15 +553,50 @@
       }
     }
 
+    let driverNotificationCount = 0;
+    function updateDriverBadge(increment) {
+      const badge = document.getElementById('bellBadge');
+      if (!badge) return;
+      driverNotificationCount += increment;
+      if (driverNotificationCount > 0) {
+        badge.textContent = driverNotificationCount;
+        badge.style.display = 'block';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const bell = document.getElementById('driverBell');
+      if (bell) {
+        bell.addEventListener('click', () => {
+          driverNotificationCount = 0;
+          updateDriverBadge(0);
+        });
+      }
+    });
+
+    let lastTargetId = null;
     async function loadDriverData() {
       try {
         currentData = await api.getDeliveryList(currentUserCourse);
         currentData.sort((a,b) => (a.order || 99) - (b.order || 99));
         renderList();
         await updateMap();
+
+        // 다음 목적지 변경 시 음성 안내
+        const pendingItems = currentData.filter(d => d.status !== 'done' && d.status !== 'excluded').sort((a,b) => (a.order||99) - (b.order||99));
+        if (pendingItems.length > 0) {
+          const target = pendingItems[0];
+          if (target.id !== lastTargetId) {
+            if (lastTargetId !== null) { // 첫 로드 제외
+              speak(`다음 목적지는 ${target.name} 입니다. 안전 운전 하세요.`);
+            }
+            lastTargetId = target.id;
+          }
+        }
       } catch (error) {
         console.error('loadDriverData error:', error);
-        throw error; // 상위 호출자에서 처리하도록 전달
       }
     }
 
@@ -767,35 +820,53 @@
       });
     }
 
-    // 화면 꺼짐 방지 (WakeLock) 및 앱 유지 로직
+    // 화면 꺼짐 방지 (WakeLock) 및 앱 유지 로직 고도화
     let wakeLock = null;
     const requestWakeLock = async () => {
       try {
         if ('wakeLock' in navigator) {
           wakeLock = await navigator.wakeLock.request('screen');
+          console.log('WakeLock 활성화됨');
+          
+          // WakeLock 해제 시 자동 재요청
+          wakeLock.addEventListener('release', () => {
+            console.log('WakeLock 해제됨, 재요청 시도...');
+            if (document.visibilityState === 'visible') requestWakeLock();
+          });
         }
       } catch (err) {
         console.log('WakeLock error:', err);
       }
     };
 
-    document.addEventListener('visibilitychange', () => {
+    // 포커스 복귀 시 로직 강화 (길안내 종료 후 앱 복귀 대응)
+    document.addEventListener('visibilitychange', async () => {
       if (document.visibilityState === 'visible') {
-        requestWakeLock();
-        loadDriverData(); // 돌아왔을 때 데이터 최신화
+        console.log('앱 포커스 복귀 - 상태 유지 및 데이터 갱신');
+        await requestWakeLock(); // 화면 유지 재요청
+        
+        // 세션 유지 확인 및 데이터 즉시 갱신
+        const userStr = localStorage.getItem('authUser');
+        if (userStr) {
+          await loadDriverData();
+          await checkNotice();
+        } else {
+          window.location.href = '../index.html'; // 세션 유실 시에만 이동
+        }
       }
     });
 
     window.addEventListener('pageshow', (event) => {
-      // bfcache 대응: 뒤로가기로 돌아왔을 때 세션 유지 확인
       if (event.persisted || (window.performance && window.performance.navigation.type === 2)) {
         loadDriverData();
       }
     });
 
-    // 초기 실행
-    requestWakeLock();
-    initApp();
+    // 초기 실행 시 강력한 화면 유지 요청
+    window.addEventListener('load', () => {
+      requestWakeLock();
+      initApp();
+    });
 
     // 실시간 공지/취소 및 배송 데이터 체크 (5초 주기)
     setInterval(async () => {

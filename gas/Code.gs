@@ -110,8 +110,11 @@ function doPost(e) {
 function login(payload) {
   const { username, password } = payload;
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('기사목록');
-  const data = sheet.getDataRange().getValues();
-  data.shift(); // 헤더 제거
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) throw new Error('등록된 기사 정보가 없습니다.');
+  
+  // 전체를 읽는 대신 범위 최적화 (2행부터 마지막행까지 7개 컬럼만)
+  const data = sheet.getRange(2, 1, lastRow - 1, 7).getValues();
   
   for(let i=0; i<data.length; i++) {
     let row = data[i];

@@ -183,6 +183,14 @@
       display: flex; flex-direction: column; gap: 5px;
     }
     .arrival-card.traffic-blink-border { animation: trafficBlink 2s infinite, slideInRight 0.4s; }
+    
+    /* 다음 목적지 핀 점멸 애니메이션 */
+    @keyframes pinPulse {
+      0% { transform: scale(1); filter: drop-shadow(0 0 0px var(--primary)); }
+      50% { transform: scale(1.15); filter: drop-shadow(0 0 10px var(--primary)); }
+      100% { transform: scale(1); filter: drop-shadow(0 0 0px var(--primary)); }
+    }
+    .pin-pulse { animation: pinPulse 1.5s infinite ease-in-out; z-index: 1000 !important; }
   </style>
 </head>
 <body>
