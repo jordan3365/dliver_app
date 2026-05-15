@@ -145,23 +145,36 @@
       try {
         const user = await api.login(username, password);
         
-        // Save to session storage
-        sessionStorage.setItem('authUser', JSON.stringify(user));
+        // Save to local storage for persistence
+        localStorage.setItem('authUser', JSON.stringify(user));
 
-        // Redirect based on role
+        // Redirect based on role (명시적 경로 사용)
+        const baseUrl = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, '');
         if (user.role === 'admin') {
-          window.location.href = './admin/index.html';
+          window.location.href = baseUrl + '/admin/index.html';
         } else if (user.role === 'driver') {
-          window.location.href = './driver/index.html';
+          window.location.href = baseUrl + '/driver/index.html';
         }
 
       } catch (err) {
-        alert(err.message);
+        console.error('Login error:', err);
+        alert('로그인 실패: ' + err.message);
         btnText.style.display = 'inline-block';
         loginLoader.style.display = 'none';
         loginBtn.disabled = false;
       }
     });
+
+    // 서버 연결 확인용 도구 (디버깅)
+    window.checkServer = async () => {
+      alert('서버 연결을 확인 중입니다...');
+      try {
+        const res = await api.getDrivers();
+        if(res) alert('서버 연결 성공! (데이터 수신 완료)');
+      } catch(e) {
+        alert('서버 연결 실패: ' + e.message);
+      }
+    };
   </script>
 </body>
 </html>

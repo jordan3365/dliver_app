@@ -2,7 +2,7 @@
 // 실제 연동 시 아래 useMock 을 false로 변경하고 GAS_WEB_APP_URL 에 URL을 넣으세요.
 // const useMock = true; 
 const useMock = false ;
-const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycby5Ez4FeffJqI01W-3z_BYdsd1X10fLmy1FKScfJydc3SRVD0JGYAsSYnV-yY7ycbNUuw/exec";
+const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxb9nwOQ0HOtZrSmtRoe1k-nE_U47sKfEHgU4-kaet-BmpdZokZdfd9QasrLR6M9D1sPw/exec".trim();
 
 let dummyDeliveryData = [];
 let dummyDrivers = [
@@ -40,17 +40,48 @@ class ApiService {
     } else {
       // 실제 GAS 통신
       try {
-        // 주의: GAS CORS 회피를 위해 Content-Type 을 text/plain 으로 전송
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30초로 연장
+
         const response = await fetch(GAS_WEB_APP_URL, {
           method: 'POST',
+          mode: 'cors',
+          redirect: 'follow',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ action: action, data: data })
+          body: JSON.stringify({ action: action, data: data }),
+          signal: controller.signal
         });
-        const result = await response.json();
-        if (!result.success) throw new Error(result.error);
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          throw new Error(`HTTP 에러! 상태코드: ${response.status}`);
+        }
+        
+        const responseText = await response.text();
+        let result;
+        try {
+          result = JSON.parse(responseText);
+        } catch (parseError) {
+          console.error("JSON 파싱 에러. 응답 내용:", responseText);
+          if (responseText.includes("google-signin")) {
+            throw new Error("Google 로그인 세션이 만료되었습니다. GAS 웹 앱 설정을 '모든 사용자(Anyone)'로 다시 확인해주세요.");
+          }
+          if (responseText.includes("<!DOCTYPE html>")) {
+            throw new Error("서버에서 HTML 응답이 왔습니다. GAS 웹 앱 배포가 올바른지 확인해주세요.");
+          }
+          throw new Error("서버 응답이 올바른 JSON 형식이 아닙니다. (GAS 웹 앱 배포 설정 확인 필요)");
+        }
+        
+        if (!result.success) throw new Error(result.error || "알 수 없는 서버 오류");
         return result;
       } catch (e) {
-        console.error("API 통신 에러:", e);
+        console.error(`API 통신 에러 [${action}]:`, e);
+        if (e.name === 'AbortError') {
+          throw new Error("서버 응답 시간이 초과되었습니다. 네트워크 상태를 확인하거나 GAS 할당량을 확인해주세요.");
+        }
+        if (e.message === 'Failed to fetch') {
+          throw new Error("서버에 연결할 수 없습니다. 1) GAS 웹 앱 URL 확인 2) 브라우저의 CORS 제한 3) 인터넷 연결을 확인해주세요.");
+        }
         throw e;
       }
     }
@@ -205,14 +236,18 @@ class ApiService {
     });
   }
 
-  // 기사 조회
   async getDrivers() {
     if(!useMock) return (await this._fetch('getDrivers')).data;
 
     return new Promise(resolve => {
       setTimeout(() => {
         loadData();
-        resolve([...dummyDrivers]);
+        const locations = JSON.parse(localStorage.getItem('driverLocations') || '{}');
+        const drivers = dummyDrivers.map(d => ({
+          ...d,
+          currentLocation: locations[d.course] || null
+        }));
+        resolve(drivers);
       }, 300);
     });
   }
@@ -277,12 +312,26 @@ class ApiService {
     return new Promise((resolve) => {
       setTimeout(() => {
         let localNotices = JSON.parse(localStorage.getItem('dummyNotices') || '[]');
-        localNotices = localNotices.filter(n => String(n.target) !== String(target));
-        localStorage.setItem('dummyNotices', JSON.stringify(localNotices));
-        resolve({ success: true });
-      }, 300);
-    });
-  }
+    localNotices = localNotices.filter(n => String(n.target) !== String(target));
+    localStorage.setItem('dummyNotices', JSON.stringify(localNotices));
+    resolve({ success: true });
+  }, 300);
+});
+}
+
+async updateDriverLocation(course, lat, lng) {
+if(!useMock) return await this._fetch('updateDriverLocation', { course, lat, lng });
+
+// Mock 모드에서는 로컬스토리지에 저장
+return new Promise((resolve) => {
+  setTimeout(() => {
+    let locations = JSON.parse(localStorage.getItem('driverLocations') || '{}');
+    locations[course] = { lat, lng, updated: Date.now() };
+    localStorage.setItem('driverLocations', JSON.stringify(locations));
+    resolve({ success: true });
+  }, 100);
+});
+}
 }
 
 export const api = new ApiService();

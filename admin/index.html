@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>관리자 대시보드 - 통합 배송관리</title>
   <link rel="stylesheet" href="../css/style.css">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
@@ -39,7 +42,8 @@
     .badge-delivering { background: #81ecec; color: #00cec9; }
     .badge-done { background: #55efc4; color: #00b894; }
 
-    #map { width: 100%; height: 100%; background: #e5e3df; z-index: 1;}
+    #map { width: 100%; flex: 1; background: #e5e3df; z-index: 1; min-height: 400px; }
+    .map-container { display: flex; flex-direction: column; height: 100%; position: relative; }
     .map-overlay { position: absolute; top: 20px; right: 20px; background: rgba(255,255,255,0.95); padding: 20px; border-radius: 12px; box-shadow: var(--shadow-md); width: 320px; z-index: 1000; font-size: 1.05rem; border: 1px solid var(--border-color); }
     .sim-overlay { position: absolute; bottom: 20px; left: 20px; background: rgba(255,255,255,0.95); padding: 15px; border-radius: 8px; box-shadow: var(--shadow-md); z-index: 1000; display:flex; gap: 10px; align-items:center;}
     
@@ -148,6 +152,37 @@
       66% { background-color: #00b894; }
       100% { background-color: #ff7675; }
     }
+
+    /* 실시간 차량 마커 스타일 */
+    .car-marker-container { position: relative; }
+    .live-badge {
+      position: absolute; top: -10px; right: -10px;
+      background: #d63031; color: white; font-size: 10px;
+      padding: 2px 4px; border-radius: 4px; font-weight: bold;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+      animation: pulseRed 1.5s infinite;
+      white-space: nowrap;
+    }
+    @keyframes pulseRed {
+      0% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.1); opacity: 0.8; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    /* HQ 도착 알림 스택 스타일 */
+    #arrivalAlertStack {
+      position: absolute; top: 20px; left: 20px; width: 300px;
+      z-index: 2000; display: flex; flex-direction: column; gap: 10px;
+      pointer-events: none;
+    }
+    .arrival-card {
+      background: rgba(255, 255, 255, 0.95); border-radius: 12px;
+      box-shadow: var(--shadow-md); padding: 15px; border-left: 6px solid var(--primary);
+      animation: slideInRight 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      pointer-events: auto; border: 1px solid var(--border-color);
+      display: flex; flex-direction: column; gap: 5px;
+    }
+    .arrival-card.traffic-blink-border { animation: trafficBlink 2s infinite, slideInRight 0.4s; }
   </style>
 </head>
 <body>
@@ -184,6 +219,7 @@
     <section id="view-dashboard" class="view-section active">
       <div class="dashboard-grid">
         <div class="card" style="height: 100%;">
+          <div id="todayDate" style="padding: 15px 15px 0 15px; font-size: 1rem; font-weight: 700; color: var(--primary);"></div>
           <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
             <h4 class="card-title">오늘의 배송 현황</h4>
             <button class="btn-primary" id="resetAllStatusBtn" style="background-color: var(--danger); padding: 5px 12px; font-size: 0.85rem;"><i class="fa-solid fa-rotate-left"></i> 전체 초기화</button>
@@ -194,11 +230,12 @@
             </ul>
           </div>
         </div>
-        <div class="card map-container" style="position: relative;">
+        <div class="card map-container" id="mapCard">
           <button id="btnFullscreenMap" style="position: absolute; top: 12px; left: 60px; z-index: 1000; background: white; color: #333; border: 2px solid rgba(0,0,0,0.2); border-radius: 4px; padding: 5px 12px; cursor: pointer; font-family: 'Pretendard', sans-serif; font-size: 0.85rem; font-weight: bold; transition: background 0.2s;">
             <i class="fa-solid fa-expand"></i> 전체화면
           </button>
           <div id="map"></div>
+          <div id="arrivalAlertStack"></div>
           <div class="map-overlay">
             <h5><i class="fa-solid fa-satellite-dish" style="color:var(--danger);"></i> 차량 관제 요약</h5>
             <hr style="margin: 10px 0; border:0; border-top:1px solid #ddd;">
@@ -470,7 +507,7 @@
 
   <!-- Excel, Postcode, Leaflet -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script src="//t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js"></script>
+  <script src="https://t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script type="module" src="./js/app.js"></script>
 </body>

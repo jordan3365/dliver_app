@@ -14,6 +14,7 @@ let liveCarMarkers = []; // 실시간 차량 위치 마커
 let selectedImagesBase64 = []; // 이미지 저장을 위한 배열
 let alertedArrivals = new Set(); // HQ 도착 알림이 뜬 코스 저장
 let prevNextDestIds = new Set(); // 이전 목적지 ID 저장
+let currentDrivers = []; // 실시간 기사 위치 정보 저장용 추가
 
 const HQ_COORD = { lat: 37.556898, lng: 127.206401 }; // 경기도 하남시 덕풍동 833-1 (현대지식산업센터 한강미사)
 
@@ -81,6 +82,18 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+function getDist(lat1, lon1, lat2, lon2) {
+  if (!lat1 || !lon1 || !lat2 || !lon2) return 999;
+  const R = 6371; // km
+  const dLat = (lat2-lat1) * Math.PI / 180;
+  const dLon = (lon2-lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+
 // AI 실시간 교통상황 (가상) 생성 함수 - 1분마다 상태 변동
 function getAiTrafficStatus(courseId) {
   const timeBlock = Math.floor(Date.now() / (1000 * 60)); 
@@ -123,14 +136,25 @@ window.alert = function(msg) {
 // -----------------------------------
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const userStr = sessionStorage.getItem('authUser');
-  if (!userStr) { window.location.href = '../index.html'; return; }
+  let userStr = localStorage.getItem('authUser');
+  
+  // 세션이 없으면 자동으로 최고관리자 세션 생성 (로그인 단계 건너뛰기)
+  if (!userStr || JSON.parse(userStr).role !== 'admin') {
+    const defaultAdmin = { role: 'admin', name: '최고관리자', token: 'auto-login-admin' };
+    localStorage.setItem('authUser', JSON.stringify(defaultAdmin));
+    userStr = JSON.stringify(defaultAdmin);
+  }
+
   const user = JSON.parse(userStr);
-  if (user.role !== 'admin') { alert('관리자 권한이 필요합니다.'); window.location.href = '../index.html'; return; }
   document.getElementById('adminName').textContent = user.name;
 
+  // 오늘 날짜 표시
+  const today = new Date();
+  const dateStr = `${today.getFullYear()}년 ${today.getMonth() + 1}월 ${today.getDate()}일`;
+  if(document.getElementById('todayDate')) document.getElementById('todayDate').textContent = dateStr;
+
   document.getElementById('logoutBtn').addEventListener('click', (e) => {
-    e.preventDefault(); sessionStorage.removeItem('authUser'); window.location.href = '../index.html';
+    e.preventDefault(); localStorage.removeItem('authUser'); window.location.href = '../index.html';
   });
 
   const navItems = document.querySelectorAll('.nav-item');
@@ -160,197 +184,210 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  initMap();
+  try {
+    initMap();
 
-  // Binds
-  document.getElementById('autoRouteBtn').addEventListener('click', executeAutoRouting);
-  document.getElementById('manualRouteBtn').addEventListener('click', executeManualRouting);
-  document.getElementById('selectAllRoutes').addEventListener('change', handleSelectAll);
-  
-  // 자동 동기화 설정 (10초마다)
-  if(dashboardPollingInterval) clearInterval(dashboardPollingInterval);
-  dashboardPollingInterval = setInterval(() => {
-    if (document.getElementById('view-dashboard').classList.contains('active')) {
-      loadDashboardData();
-    }
-  }, 10000);
-  
-  // Client Modal Binds
-  document.getElementById('addClientBtn').addEventListener('click', openClientModal);
-  document.getElementById('closeClientModal').addEventListener('click', closeClientModal);
-  document.getElementById('cancelClientModal').addEventListener('click', closeClientModal);
-  document.getElementById('saveClientBtn').addEventListener('click', saveClient);
-  document.getElementById('searchAddressBtn').addEventListener('click', execDaumPostcode);
-  document.getElementById('clientImages').addEventListener('change', handleImagePreview);
-  
-  // Download Template
-  document.getElementById('downloadExcelTemplateBtn').addEventListener('click', downloadExcelTemplate);
-
-  // Driver Modal Binds
-  document.getElementById('addDriverBtn').addEventListener('click', () => { document.getElementById('driverForm').reset(); document.getElementById('driverModal').classList.add('active'); });
-  document.getElementById('closeDriverModal').addEventListener('click', () => document.getElementById('driverModal').classList.remove('active'));
-  document.getElementById('cancelDriverModal').addEventListener('click', () => document.getElementById('driverModal').classList.remove('active'));
-  document.getElementById('saveDriverBtn').addEventListener('click', saveDriver);
-
-  // Excel Binds
-  document.getElementById('uploadExcelBtn').addEventListener('click', () => document.getElementById('excelUploadInput').click());
-  document.getElementById('excelUploadInput').addEventListener('change', handleExcelUpload);
-
-  // Simulation
-  document.getElementById('startSimBtn').addEventListener('click', runSimulation);
-
-  // Notice Management
-  const noticeEditor = document.getElementById('noticeEditor');
-  const noticeTarget = document.getElementById('noticeTarget');
-
-  // 이미지 붙여넣기 핸들러
-  noticeEditor.addEventListener('paste', (e) => {
-    const items = (e.clipboardData || e.originalEvent.clipboardData).items;
-    for (let index in items) {
-      const item = items[index];
-      if (item.kind === 'file' && item.type.startsWith('image/')) {
-        const blob = item.getAsFile();
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const img = document.createElement('img');
-          img.src = event.target.result;
-          noticeEditor.appendChild(img);
-        };
-        reader.readAsDataURL(blob);
-      }
-    }
-  });
-
-  // 이미지 드래그 & 드롭 핸들러
-  noticeEditor.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    noticeEditor.style.borderColor = 'var(--primary)';
-    noticeEditor.style.backgroundColor = 'rgba(108, 92, 231, 0.05)';
-  });
-
-  noticeEditor.addEventListener('dragleave', (e) => {
-    e.preventDefault();
-    noticeEditor.style.borderColor = 'var(--border-color)';
-    noticeEditor.style.backgroundColor = 'white';
-  });
-
-  noticeEditor.addEventListener('drop', (e) => {
-    e.preventDefault();
-    noticeEditor.style.borderColor = 'var(--border-color)';
-    noticeEditor.style.backgroundColor = 'white';
-
-    const files = e.dataTransfer.files;
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      if (file.type.startsWith('image/')) {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const img = document.createElement('img');
-          img.src = event.target.result;
-          noticeEditor.appendChild(img);
-        };
-        reader.readAsDataURL(file);
-      }
-    }
-  });
-
-  // 타겟 변경 시 기존 공지 불러오기
-  noticeTarget.addEventListener('change', async () => {
-    const notices = await api.getNotices();
-    const current = notices.find(n => String(n.target) === String(noticeTarget.value));
-    noticeEditor.innerHTML = current ? current.content : '';
-  });
-
-  document.getElementById('saveNoticeBtn').addEventListener('click', async () => {
-    const target = noticeTarget.value;
-    const content = noticeEditor.innerHTML;
+    // Binds
+    document.getElementById('autoRouteBtn').addEventListener('click', executeAutoRouting);
+    document.getElementById('manualRouteBtn').addEventListener('click', executeManualRouting);
+    document.getElementById('selectAllRoutes').addEventListener('change', handleSelectAll);
     
-    // 이미지 추출 (Base64 및 기존 URL 포함)
-    const imgs = noticeEditor.querySelectorAll('img');
-    const images = Array.from(imgs).map(img => img.src); // 모든 이미지 URL/Base64 수집
-
-    document.getElementById('saveNoticeBtn').disabled = true;
-    document.getElementById('saveNoticeBtn').innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 처리 중...';
+    // 자동 동기화 설정 (5초마다로 변경하여 실시간성 강화)
+    if(dashboardPollingInterval) clearInterval(dashboardPollingInterval);
+    dashboardPollingInterval = setInterval(() => {
+      if (document.getElementById('view-dashboard').classList.contains('active')) {
+        loadDashboardData();
+      }
+    }, 5000);
     
-    try {
-      await api.saveNotice(target, content, images);
-      showAdminDialog('저장 완료', '공지사항이 성공적으로 저장 및 전송되었습니다.');
-      renderNoticeView(); // 목록 갱신
-    } catch(e) {
-      showAdminDialog('오류', '공지사항 저장에 실패했습니다.');
-    } finally {
-      document.getElementById('saveNoticeBtn').disabled = false;
-      document.getElementById('saveNoticeBtn').innerHTML = '<i class="fa-solid fa-paper-plane"></i> 공지사항 저장 및 전송';
-    }
-  });
+    // Client Modal Binds
+    document.getElementById('addClientBtn').addEventListener('click', openClientModal);
+    document.getElementById('closeClientModal').addEventListener('click', closeClientModal);
+    document.getElementById('cancelClientModal').addEventListener('click', closeClientModal);
+    document.getElementById('saveClientBtn').addEventListener('click', saveClient);
+    document.getElementById('searchAddressBtn').addEventListener('click', execDaumPostcode);
+    document.getElementById('clientImages').addEventListener('change', handleImagePreview);
+    
+    // Download Template
+    document.getElementById('downloadExcelTemplateBtn').addEventListener('click', downloadExcelTemplate);
 
-  document.getElementById('deleteNoticeBtn').addEventListener('click', async () => {
-    const target = noticeTarget.value;
-    showAdminDialog('공지 삭제', '현재 선택된 대상의 공지사항을 정말 삭제하시겠습니까?', true, async () => {
-      try {
-        await api.deleteNotice(target);
-        noticeEditor.innerHTML = '';
-        showAdminDialog('삭제 완료', '공지사항이 성공적으로 삭제되었습니다.');
-        renderNoticeView(); // 목록 갱신
-      } catch(e) {
-        showAdminDialog('오류', '공지 삭제에 실패했습니다.');
+    // Driver Modal Binds
+    document.getElementById('addDriverBtn').addEventListener('click', () => { document.getElementById('driverForm').reset(); document.getElementById('driverModal').classList.add('active'); });
+    document.getElementById('closeDriverModal').addEventListener('click', () => document.getElementById('driverModal').classList.remove('active'));
+    document.getElementById('cancelDriverModal').addEventListener('click', () => document.getElementById('driverModal').classList.remove('active'));
+    document.getElementById('saveDriverBtn').addEventListener('click', saveDriver);
+
+    // Excel Binds
+    document.getElementById('uploadExcelBtn').addEventListener('click', () => document.getElementById('excelUploadInput').click());
+    document.getElementById('excelUploadInput').addEventListener('change', handleExcelUpload);
+
+    // Simulation
+    document.getElementById('startSimBtn').addEventListener('click', runSimulation);
+
+    // Notice Management
+    const noticeEditor = document.getElementById('noticeEditor');
+    const noticeTarget = document.getElementById('noticeTarget');
+
+    // 이미지 붙여넣기 핸들러
+    noticeEditor.addEventListener('paste', (e) => {
+      const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+      for (let index in items) {
+        const item = items[index];
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const blob = item.getAsFile();
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            const img = document.createElement('img');
+            img.src = event.target.result;
+            noticeEditor.appendChild(img);
+          };
+          reader.readAsDataURL(blob);
+        }
       }
     });
-  });
 
-  // Reset All Status
-  document.getElementById('resetAllStatusBtn').addEventListener('click', () => {
-    showAdminDialog('전체 초기화', '모든 배송처의 배송상태를 "대기중"으로 완전히 초기화하시겠습니까?\n(기사앱 데이터도 즉시 동기화되어 초기화됩니다.)', true, async () => {
+    // 이미지 드래그 & 드롭 핸들러
+    noticeEditor.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      noticeEditor.style.borderColor = 'var(--primary)';
+      noticeEditor.style.backgroundColor = 'rgba(108, 92, 231, 0.05)';
+    });
+
+    noticeEditor.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      noticeEditor.style.borderColor = 'var(--border-color)';
+      noticeEditor.style.backgroundColor = 'white';
+    });
+
+    noticeEditor.addEventListener('drop', (e) => {
+      e.preventDefault();
+      noticeEditor.style.borderColor = 'var(--border-color)';
+      noticeEditor.style.backgroundColor = 'white';
+
+      const files = e.dataTransfer.files;
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (file.type.startsWith('image/')) {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            const img = document.createElement('img');
+            img.src = event.target.result;
+            noticeEditor.appendChild(img);
+          };
+          reader.readAsDataURL(file);
+        }
+      }
+    });
+
+    // 타겟 변경 시 기존 공지 불러오기
+    noticeTarget.addEventListener('change', async () => {
+      const notices = await api.getNotices();
+      const current = notices.find(n => String(n.target) === String(noticeTarget.value));
+      noticeEditor.innerHTML = current ? current.content : '';
+    });
+
+    document.getElementById('saveNoticeBtn').addEventListener('click', async () => {
+      const target = noticeTarget.value;
+      const content = noticeEditor.innerHTML;
+      
+      const imgs = noticeEditor.querySelectorAll('img');
+      const images = Array.from(imgs).map(img => img.src);
+
+      document.getElementById('saveNoticeBtn').disabled = true;
+      document.getElementById('saveNoticeBtn').innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 처리 중...';
+      
       try {
-        const btn = document.getElementById('resetAllStatusBtn');
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 처리중';
-        btn.disabled = true;
-        await api.resetAllDeliveryStatus();
-        api.sendAdminNotification('배송 상태가 전체 초기화되었습니다.');
-        alertedArrivals.clear(); // 알림 상태 초기화
-        await loadDashboardData();
-        showAdminDialog('초기화 완료', '모든 배송 데이터가 "대기중" 상태로 초기화되었습니다.');
+        await api.saveNotice(target, content, images);
+        showAdminDialog('저장 완료', '공지사항이 성공적으로 저장 및 전송되었습니다.');
+        renderNoticeView();
       } catch(e) {
-        showAdminDialog('오류', '초기화 실패');
+        showAdminDialog('오류', '공지사항 저장에 실패했습니다.');
       } finally {
-        const btn = document.getElementById('resetAllStatusBtn');
-        btn.innerHTML = '<i class="fa-solid fa-rotate-left"></i> 전체 초기화';
-        btn.disabled = false;
+        document.getElementById('saveNoticeBtn').disabled = false;
+        document.getElementById('saveNoticeBtn').innerHTML = '<i class="fa-solid fa-paper-plane"></i> 공지사항 저장 및 전송';
       }
     });
-  });
 
-  // HQ Arrival Alert Modal Binds
-  document.getElementById('closeArrivalAlertModal').addEventListener('click', () => document.getElementById('arrivalAlertModal').classList.remove('active'));
-  document.getElementById('confirmArrivalAlert').addEventListener('click', () => document.getElementById('arrivalAlertModal').classList.remove('active'));
-
-  // Map Fullscreen Toggle
-  const btnFullscreen = document.getElementById('btnFullscreenMap');
-  const mapContainer = document.querySelector('.map-container');
-  if (btnFullscreen && mapContainer) {
-    btnFullscreen.addEventListener('click', () => {
-      mapContainer.classList.toggle('fullscreen');
-      if(mapContainer.classList.contains('fullscreen')) {
-        btnFullscreen.innerHTML = '<i class="fa-solid fa-compress"></i> 축소화면';
-        btnFullscreen.style.background = '#f1f2f6';
-      } else {
-        btnFullscreen.innerHTML = '<i class="fa-solid fa-expand"></i> 전체화면';
-        btnFullscreen.style.background = 'white';
-      }
-      setTimeout(() => map.invalidateSize(), 300);
+    document.getElementById('deleteNoticeBtn').addEventListener('click', async () => {
+      const target = noticeTarget.value;
+      showAdminDialog('공지 삭제', '현재 선택된 대상의 공지사항을 정말 삭제하시겠습니까?', true, async () => {
+        try {
+          await api.deleteNotice(target);
+          noticeEditor.innerHTML = '';
+          showAdminDialog('삭제 완료', '공지사항이 성공적으로 삭제되었습니다.');
+          renderNoticeView();
+        } catch(e) {
+          showAdminDialog('오류', '공지 삭제에 실패했습니다.');
+        }
+      });
     });
-  }
 
-  // LocalStorage Event for real-time alerts
-  window.addEventListener('storage', (e) => {
-    if (e.key === 'adminNotification') {
-      const notif = JSON.parse(e.newValue);
-      showToast(notif.message);
-      loadDashboardData(); // 알림 오면 화면 자동 리프레시
+    // Reset All Status
+    document.getElementById('resetAllStatusBtn').addEventListener('click', () => {
+      showAdminDialog('전체 초기화', '모든 배송처의 배송상태를 "대기중"으로 완전히 초기화하시겠습니까?\n(기사앱 데이터도 즉시 동기화되어 초기화됩니다.)', true, async () => {
+        try {
+          const btn = document.getElementById('resetAllStatusBtn');
+          btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 처리중';
+          btn.disabled = true;
+          await api.resetAllDeliveryStatus();
+          api.sendAdminNotification('배송 상태가 전체 초기화되었습니다.');
+          alertedArrivals.clear();
+          await loadDashboardData();
+          showAdminDialog('초기화 완료', '모든 배송 데이터가 "대기중" 상태로 초기화되었습니다.');
+        } catch(e) {
+          showAdminDialog('오류', '초기화 실패');
+        } finally {
+          const btn = document.getElementById('resetAllStatusBtn');
+          btn.innerHTML = '<i class="fa-solid fa-rotate-left"></i> 전체 초기화';
+          btn.disabled = false;
+        }
+      });
+    });
+
+    // HQ Arrival Alert Modal Binds
+    document.getElementById('closeArrivalAlertModal').addEventListener('click', () => document.getElementById('arrivalAlertModal').classList.remove('active'));
+    document.getElementById('confirmArrivalAlert').addEventListener('click', () => document.getElementById('arrivalAlertModal').classList.remove('active'));
+
+    // Map Fullscreen Toggle
+    const btnFullscreen = document.getElementById('btnFullscreenMap');
+    const mapContainer = document.querySelector('.map-container');
+    if (btnFullscreen && mapContainer) {
+      btnFullscreen.addEventListener('click', () => {
+        mapContainer.classList.toggle('fullscreen');
+        if(mapContainer.classList.contains('fullscreen')) {
+          btnFullscreen.innerHTML = '<i class="fa-solid fa-compress"></i> 축소화면';
+          btnFullscreen.style.background = '#f1f2f6';
+        } else {
+          btnFullscreen.innerHTML = '<i class="fa-solid fa-expand"></i> 전체화면';
+          btnFullscreen.style.background = 'white';
+        }
+        setTimeout(() => map.invalidateSize(), 300);
+      });
     }
-  });
 
-  await loadDashboardData();
+    // LocalStorage Event for real-time alerts
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'adminNotification') {
+        const notif = JSON.parse(e.newValue);
+        showToast(notif.message);
+        loadDashboardData();
+      }
+    });
+
+    await loadDashboardData();
+  } catch (err) {
+    console.error("App initialization failed:", err);
+    const errorMsg = `
+      <div style="padding: 40px; text-align: center; color: var(--danger);">
+        <i class="fa-solid fa-triangle-exclamation fa-3x" style="margin-bottom: 20px;"></i>
+        <h2 style="margin-bottom: 10px;">앱 로딩 실패</h2>
+        <p style="margin-bottom: 20px;">${err.message}</p>
+        <button onclick="location.reload()" class="btn-primary">다시 시도</button>
+        <button onclick="localStorage.removeItem('authUser'); location.href='../index.html'" class="btn-primary" style="background:var(--text-muted); margin-left:10px;">로그아웃 후 재로그인</button>
+      </div>
+    `;
+    document.body.innerHTML = errorMsg;
+  }
 });
 
 function initMap() {
@@ -368,19 +405,37 @@ function initMap() {
 }
 
 async function loadDashboardData() {
-  currentData = await api.getDeliveryList();
-  renderDashboardList(currentData);
-  await updateMapMarkers(currentData);
-  updateVehicleStatus(currentData);
-  
-  if (aiTrafficInterval) clearInterval(aiTrafficInterval);
-  aiTrafficInterval = setInterval(() => {
-    if (currentData) updateVehicleStatus(currentData);
-  }, 60000); 
+  try {
+    const deliveryRes = await api.getDeliveryList();
+    const driverRes = await api.getDrivers();
+    
+    currentData = deliveryRes;
+    currentDrivers = driverRes;
 
-  if (document.getElementById('view-routing').classList.contains('active')) renderRoutingView();
-  if (document.getElementById('view-clients').classList.contains('active')) renderClientsView();
-  if (document.getElementById('view-drivers').classList.contains('active')) renderDriversView();
+    renderDashboardList(currentData);
+    await updateMapMarkers(currentData, currentDrivers);
+    updateVehicleStatus(currentData, currentDrivers);
+    
+    if (aiTrafficInterval) clearInterval(aiTrafficInterval);
+    aiTrafficInterval = setInterval(() => {
+      if (currentData) updateVehicleStatus(currentData, currentDrivers);
+    }, 60000); 
+
+    if (document.getElementById('view-routing').classList.contains('active')) renderRoutingView();
+    if (document.getElementById('view-clients').classList.contains('active')) renderClientsView();
+    if (document.getElementById('view-drivers').classList.contains('active')) renderDriversView();
+  } catch (error) {
+    console.error('데이터 로딩 중 오류:', error);
+    const listEl = document.getElementById('deliveryList');
+    if (listEl) {
+      listEl.innerHTML = `<li style="text-align:center; color:var(--danger); padding:20px;">
+        <i class="fa-solid fa-triangle-exclamation"></i> 데이터 로딩 실패<br>
+        <small style="display:block; margin-top:5px; color:#999;">${error.message || '네트워크 상태를 확인해주세요.'}</small>
+      </li>`;
+    }
+    const statusEl = document.getElementById('vehicleStatus');
+    if (statusEl) statusEl.innerHTML = '<div style="text-align:center; color:var(--danger); padding:10px;">데이터를 불러올 수 없습니다.</div>';
+  }
 }
 
 function showToast(msg) {
@@ -395,7 +450,12 @@ function showToast(msg) {
 function renderDashboardList(data) {
   const listEl = document.getElementById('deliveryList');
   listEl.innerHTML = '';
-  const activeDeliveries = data.filter(d => d.course !== null).sort((a,b)=> a.course - b.course || a.order - b.order);
+  const activeDeliveries = data.filter(d => d.course && d.course !== "").sort((a,b)=> {
+    const courseA = parseInt(a.course) || 0;
+    const courseB = parseInt(b.course) || 0;
+    if (courseA !== courseB) return courseA - courseB;
+    return (a.order || 0) - (b.order || 0);
+  });
 
   if (activeDeliveries.length === 0) {
     listEl.innerHTML = '<li style="text-align:center; color:#999;">할당된 데이터가 없습니다.</li>';
@@ -406,22 +466,40 @@ function renderDashboardList(data) {
     const li = document.createElement('li');
     li.className = 'delivery-item animate-fade-in';
     
-    // 오늘의 배송현황 코스별 배경색 적용
     const baseColor = getCourseColor(item.course);
-    li.style.backgroundColor = hexToRgba(baseColor, 0.05); // 아주 연한 배경
-    li.style.borderLeft = `5px solid ${baseColor}`;
+    li.style.cssText = `
+      background-color: ${hexToRgba(baseColor, 0.03)};
+      border-left: 4px solid ${baseColor};
+      padding: 8px 12px;
+      margin-bottom: 6px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    `;
     
-    let badgeHtml = item.status === 'done' ? '<span class="badge badge-done">완료</span>' : 
-                    item.status === 'pending' ? '<span class="badge badge-pending">대기중</span>' : 
-                    '<span class="badge badge-delivering">배송중</span>';
+    let isExcluded = item.status === 'excluded';
+    let badgeHtml = isExcluded ? '<span class="badge" style="background:#eee; color:#999; font-size:0.7rem;">제외</span>' : 
+                    (item.status === 'done' ? '<span class="badge badge-done" style="font-size:0.7rem;">완료</span>' : 
+                    item.status === 'pending' ? '<span class="badge badge-pending" style="font-size:0.7rem;">대기</span>' : 
+                    '<span class="badge badge-delivering" style="font-size:0.7rem;">배송중</span>');
 
     li.innerHTML = `
-      <div class="item-header">
-        <strong>[코스 ${item.course}] ${item.order ? item.order+'순번' : ''} ${item.name}</strong>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="display:flex; align-items:center; gap:6px; flex:1; overflow:hidden;">
+          <input type="checkbox" ${isExcluded ? 'checked' : ''} 
+            style="width:16px; height:16px; cursor:pointer;" 
+            onclick="event.stopPropagation(); toggleExclude(${item.id}, this.checked)"
+            title="배송 제외">
+          <strong style="font-size:0.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; ${isExcluded ? 'text-decoration:line-through; color:#bbb;' : ''}">
+            ${item.order ? item.order+'.' : ''} ${item.name}
+          </strong>
+        </div>
         ${badgeHtml}
       </div>
-      <div style="font-size: 0.85rem; color: var(--text-muted);">
-        <i class="fa-solid fa-location-dot"></i> ${item.address1}
+      <div style="font-size: 0.75rem; color: var(--text-muted); margin-left: 22px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; ${isExcluded ? 'text-decoration:line-through; opacity:0.5;' : ''}">
+        [${item.course}호차] ${item.address1}
       </div>
     `;
     li.addEventListener('click', () => {
@@ -434,7 +512,7 @@ function renderDashboardList(data) {
   });
 }
 
-async function updateMapMarkers(data) {
+async function updateMapMarkers(data, drivers = []) {
   // 기존 마커 및 경로 제거
   markers.forEach(m => map.removeLayer(m));
   markers = [];
@@ -462,14 +540,15 @@ async function updateMapMarkers(data) {
   // 새로 추가된 목적지 (배송 완료 후 다음 목적지로 이동 시)
   const newlyAddedDestIds = [...nextDestIds].filter(id => !prevNextDestIds.has(id));
 
-  data.forEach(item => {
+    data.forEach(item => {
     if (item.latitude && item.longitude && item.course) {
       if(!coursePaths[item.course]) coursePaths[item.course] = [];
       coursePaths[item.course].push(item);
 
+      let isExcluded = item.status === 'excluded';
       let baseColor = getCourseColor(item.course);
-      let pinColor = item.status === 'done' ? '#b2bec3' : baseColor; 
-      let orderText = item.status === 'done' ? '<i class="fa-solid fa-check" style="font-size:12px;"></i>' : (item.order ? item.order : '-');
+      let pinColor = item.status === 'done' ? '#b2bec3' : (isExcluded ? '#dfe6e9' : baseColor); 
+      let orderText = item.status === 'done' ? '<i class="fa-solid fa-check" style="font-size:12px;"></i>' : (isExcluded ? '<i class="fa-solid fa-xmark" style="font-size:12px;"></i>' : (item.order ? item.order : '-'));
       
       let classNames = 'map-pin';
       let isNextDest = nextDestIds.has(item.id);
@@ -477,16 +556,21 @@ async function updateMapMarkers(data) {
 
       const pinIcon = L.divIcon({
         className: classNames,
-        html: `<i class="fa-solid fa-location-pin" style="color: ${pinColor}; ${item.status === 'done' ? 'opacity:0.8;' : ''}"></i><span>${orderText}</span>`,
+        html: `<i class="fa-solid fa-location-pin" style="color: ${pinColor}; ${item.status === 'done' || isExcluded ? 'opacity:0.6;' : ''}"></i><span style="${isExcluded ? 'color:#636e72;' : ''}">${orderText}</span>`,
         iconSize: [32, 42], iconAnchor: [16, 42], popupAnchor: [0, -42]
       });
 
       const marker = L.marker([item.latitude, item.longitude], {icon: pinIcon, title: String(item.id)}).addTo(map);
+      
+      let statusBadgeClass = item.status === 'done' ? 'badge-done' : (isExcluded ? 'badge-pending' : 'badge-pending');
+      let statusLabel = item.status === 'done' ? '완료' : (isExcluded ? '제외' : '대기중');
+      let statusStyle = isExcluded ? 'background:#eee; color:#999; border:1px solid #ddd;' : '';
+
       marker.bindPopup(`
-        <div style="text-align:center;">
-          <h4 style="margin:0 0 5px 0;">${item.name}</h4>
-          <span class="badge ${item.status==='done'?'badge-done':'badge-pending'}">${item.status==='done'?'완료':'대기중'}</span><br>
-          <small>코스: ${item.course} | 순번: ${orderText}</small><br>
+        <div style="text-align:center; ${isExcluded ? 'opacity:0.7;' : ''}">
+          <h4 style="margin:0 0 5px 0; ${isExcluded ? 'text-decoration:line-through; color:#999;' : ''}">${item.name}</h4>
+          <span class="badge ${statusBadgeClass}" style="${statusStyle}">${statusLabel}</span><br>
+          <small>코스: ${item.course} | 순번: ${item.order || '-'}</small><br>
           <small>${item.address1}</small>
         </div>
       `, { autoClose: false, closeOnClick: false });
@@ -505,7 +589,11 @@ async function updateMapMarkers(data) {
   const roadPathPromises = courseKeys.map(async (course) => {
     const items = coursePaths[course].sort((a,b) => (a.order || 999) - (b.order || 999));
     const rawPoints = [[HQ_COORD.lat, HQ_COORD.lng]];
-    items.forEach(it => rawPoints.push([it.latitude, it.longitude]));
+    items.forEach(it => {
+      if (it.latitude && it.longitude) {
+        rawPoints.push([parseFloat(it.latitude), parseFloat(it.longitude)]);
+      }
+    });
     
     try {
       const roadPoints = await getRoadPath(rawPoints);
@@ -524,12 +612,22 @@ async function updateMapMarkers(data) {
     const poly = L.polyline(roadPoints, {color: color, weight: 6, opacity: 0.7}).addTo(map);
     livePolylines.push(poly);
 
-    // 차량 위치 추정 (마지막 완료 지점)
-    const doneItems = items.filter(it => it.status === 'done');
+    // 차량 위치 결정 (실시간 GPS 우선, 없으면 마지막 완료 지점)
+    const driverInfo = drivers.find(d => String(d.course) === String(course));
     let carPos = [HQ_COORD.lat, HQ_COORD.lng];
-    if(doneItems.length > 0) {
-      const lastDone = doneItems[doneItems.length - 1];
-      carPos = [lastDone.latitude, lastDone.longitude];
+    let isLiveGps = false;
+
+    if (driverInfo && driverInfo.currentLocation) {
+      // 실시간 GPS 사용
+      carPos = [driverInfo.currentLocation.lat, driverInfo.currentLocation.lng];
+      isLiveGps = true;
+    } else {
+      // 위치 추정 (마지막 완료 지점)
+      const doneItems = items.filter(it => it.status === 'done');
+      if(doneItems.length > 0) {
+        const lastDone = doneItems[doneItems.length - 1];
+        carPos = [lastDone.latitude, lastDone.longitude];
+      }
     }
 
     const isActive = items.some(it => it.status === 'delivering' || it.status === 'done');
@@ -538,11 +636,28 @@ async function updateMapMarkers(data) {
     if(isActive && !isAllDone) {
       const carIcon = L.divIcon({
         className: 'live-car',
-        html: `<i class="fa-solid fa-truck" style="color:white; background:${color}; padding:6px; border-radius:50%; font-size:16px; border:2px solid white; box-shadow:0 0 15px ${color};"></i>`,
+        html: `
+          <div class="car-marker-container">
+            <i class="fa-solid fa-truck" style="color:white; background:${color}; padding:6px; border-radius:50%; font-size:16px; border:2px solid white; box-shadow:0 0 15px ${color};"></i>
+            ${isLiveGps ? '<span class="live-badge">LIVE</span>' : ''}
+          </div>
+        `,
         iconSize: [32, 32], iconAnchor: [16, 16]
       });
       const carMarker = L.marker(carPos, {icon: carIcon, zIndexOffset: 500}).addTo(map);
       liveCarMarkers.push(carMarker);
+
+      // 근접 알림 체크 (다음 목적지 100m 이내 접근 시 팝업 자동 오픈)
+      const nextDest = items.find(it => it.status !== 'done');
+      if (nextDest) {
+        const dist = getDist(carPos[0], carPos[1], nextDest.latitude, nextDest.longitude);
+        if (dist <= 0.1) { // 100m 이내
+          const marker = markers.find(m => m.options.title === String(nextDest.id));
+          if (marker && !marker.isPopupOpen()) {
+            marker.openPopup();
+          }
+        }
+      }
     }
   });
 
@@ -555,51 +670,64 @@ async function updateMapMarkers(data) {
   prevNextDestIds = nextDestIds;
 }
 
-function updateVehicleStatus(data) {
+function updateVehicleStatus(data, drivers = []) {
   const statusEl = document.getElementById('vehicleStatus');
-  const activeData = data.filter(d => d.course !== null);
-  const courses = [...new Set(activeData.map(d => d.course))].sort();
+  const activeData = data.filter(d => d.course !== null && d.course !== undefined && d.course !== "");
+  const courses = [...new Set(activeData.map(d => String(d.course)))].sort((a, b) => parseInt(a) - parseInt(b));
   let html = '';
+
+  let totalActiveDrivers = 0;
+  let arrivedDriversCount = 0;
 
   // Update Simulation Course Select
   const simSelect = document.getElementById('simCourse');
   const currentSimValue = simSelect.value;
-  simSelect.innerHTML = '<option value="all">전체 코스</option>';
+  const newOptionsHtml = '<option value="all">전체 코스</option>' + 
+    courses.map(c => `<option value="${c}">코스 ${c}</option>`).join('');
+  
+  if (simSelect.innerHTML !== newOptionsHtml) {
+    simSelect.innerHTML = newOptionsHtml;
+    if (currentSimValue && [...simSelect.options].some(o => o.value === currentSimValue)) {
+      simSelect.value = currentSimValue;
+    }
+  }
 
-  courses.forEach(course => {
-    // Add to simulation select
-    const opt = document.createElement('option');
-    opt.value = course;
-    opt.textContent = `코스 ${course}`;
-    simSelect.appendChild(opt);
-
-    // Update status UI
-    const courseData = activeData.filter(d => d.course === course);
+  // 기사 목록(drivers)을 기준으로 모든 차량 표시
+  drivers.forEach(driver => {
+    const course = String(driver.course);
+    // 제외(excluded)된 배송처는 기사별 배송현황 계산에서 완전히 제외
+    const courseData = activeData.filter(d => String(d.course) === course && d.status !== 'excluded');
+    if (courseData.length === 0) return;
+    
+    totalActiveDrivers++;
     const total = courseData.length;
     const done = courseData.filter(d => d.status === 'done').length;
-    let statusText = done === total ? '복귀중(완료)' : (done > 0 ? '배송중' : '운행 전');
+    const isDeliveringNow = courseData.some(d => d.status === 'delivering');
+    let statusText = done === total ? '복귀중(완료)' : (isDeliveringNow ? '배송중' : (done > 0 ? '배송중' : '운행 전'));
     let cColor = getCourseColor(course);
     let progressPct = total > 0 ? Math.round((done/total)*100) : 0;
     
-    // AI Traffic Mock Logic
     const remaining = total - done;
     const traffic = getAiTrafficStatus(course);
     let trafficHtml = '';
     
-    // 남은 시간 계산 (배송중이거나 복귀중일 때)
-    const baseMin = remaining * 15; // 남은 건당 15분 가정
-    const totalMin = baseMin + (remaining === 0 ? 10 : traffic.delay); // 복귀 시 기본 10분 추가
+    const baseMin = remaining * 15;
+    const totalMin = baseMin + (remaining === 0 ? 10 : traffic.delay); 
     let now = new Date();
     now.setMinutes(now.getMinutes() + totalMin);
     let etaTime = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
 
-    // 15분 전 알림 체크 (모든 배송 완료 후 본사 복귀 중일 때만)
+    // 15분 전 알림 체크
     const isReturning = (done === total && total > 0);
-    if (isReturning && totalMin <= 15 && totalMin > 0 && !alertedArrivals.has(course)) {
-      showArrivalAlert(course, etaTime);
-      alertedArrivals.add(course);
+    if (isReturning) {
+      if (totalMin <= 10) arrivedDriversCount++; // 도착 임박 (초기화 트리거용)
+
+      if (totalMin <= 15 && totalMin > 10 && !alertedArrivals.has(course)) {
+        showArrivalAlert(course, etaTime);
+        alertedArrivals.add(course);
+      }
     }
-    // 운행 시작 전이거나 알림 범위에서 벗어나면 상태 초기화
+
     if (done === 0 || totalMin > 20) {
       alertedArrivals.delete(course);
     }
@@ -634,8 +762,8 @@ function updateVehicleStatus(data) {
     html += `
       <div style="background: #fafbfc; border: 1px solid var(--border-color); border-left: 6px solid ${cColor}; padding: 12px; margin-bottom: 12px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.02);">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-          <strong style="color: var(--text-main); font-size:1.05rem;">${course}호차 (코스 ${course})</strong>
-          <span style="background:${done === total ? 'var(--success)' : (done > 0 ? 'var(--primary)' : 'var(--text-muted)')}; color:white; padding:3px 8px; border-radius:12px; font-size:0.75rem; font-weight:bold;">${statusText}</span>
+          <strong style="color: var(--text-main); font-size:1.05rem;">${driver.name} (${course}호차)</strong>
+          <span style="background:${done === total && total > 0 ? 'var(--success)' : (isDeliveringNow ? 'var(--primary)' : (done > 0 ? 'var(--primary)' : 'var(--text-muted)'))}; color:white; padding:3px 8px; border-radius:12px; font-size:0.75rem; font-weight:bold;">${statusText}</span>
         </div>
         <div style="color:var(--text-main); font-size:0.9rem; display:flex; justify-content:space-between; align-items:center;">
           <span>완료: <b>${done}</b> / ${total}건</span>
@@ -644,10 +772,20 @@ function updateVehicleStatus(data) {
         <div style="width:100%; background:#e9ecef; height:6px; border-radius:3px; margin-top:8px; overflow:hidden;">
           <div style="width:${progressPct}%; background:${cColor}; height:100%; transition: width 0.5s ease;"></div>
         </div>
+        ${statusText === '운행 전' && total > 0 ? `
+          <button onclick="adminStartCourse('${course}')" style="width:100%; margin-top:10px; padding:8px; background:var(--primary); color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold;">
+            <i class="fa-solid fa-play"></i> 배송 출발 시키기
+          </button>
+        ` : ''}
         ${trafficHtml}
       </div>
     `;
   });
+
+  // 전체 차량 도착 시 자동 초기화 실행
+  if (totalActiveDrivers > 0 && totalActiveDrivers === arrivedDriversCount) {
+    autoResetSystem();
+  }
   
   if (currentSimValue && [...simSelect.options].some(o => o.value === currentSimValue)) {
     simSelect.value = currentSimValue;
@@ -656,30 +794,85 @@ function updateVehicleStatus(data) {
   statusEl.innerHTML = html || '운행 중인 차량이 없습니다.';
 }
 
-function showArrivalAlert(course, eta) {
-  const modal = document.getElementById('arrivalAlertModal');
-  const body = document.getElementById('arrivalAlertBody');
-  const courseColor = getCourseColor(course);
+// 자동 초기화 실행 플래그 및 함수
+let isAutoResetting = false;
+async function autoResetSystem() {
+  if (isAutoResetting) return;
+  isAutoResetting = true;
   
-  body.innerHTML = `
-    <div style="font-size: 1.5rem; font-weight: 800; margin-bottom: 20px; color: var(--text-main);">
-      <span style="color:${courseColor}; text-shadow: 0 0 10px ${hexToRgba(courseColor, 0.3)};">${course}호차</span>가 곧 HQ에 도착합니다!
+  console.log("전체 차량 본사 도착 감지 - 시스템 자동 초기화를 진행합니다.");
+  try {
+    const res = await api.resetAllDeliveryStatus();
+    if (res.success) {
+      showToast("모든 차량 도착 - 오늘의 업무가 종료되어 시스템이 자동 초기화되었습니다.");
+      alertedArrivals.clear();
+      await loadDashboardData();
+    }
+  } catch (e) {
+    console.error("자동 초기화 실패:", e);
+  } finally {
+    setTimeout(() => { isAutoResetting = false; }, 300000); // 5분간 재작동 방지
+  }
+}
+
+window.adminStartCourse = async function(course) {
+  if(!confirm(`코스 ${course}의 배송을 시작 처리하시겠습니까?`)) return;
+  try {
+    await api.updateCourseStatus(course, 'delivering');
+    api.sendAdminNotification(`[관리자] 코스 ${course} 배송이 강제 시작되었습니다.`);
+    loadDashboardData();
+  } catch(e) {
+    alert('배송 시작 처리 중 오류가 발생했습니다.');
+  }
+};
+
+window.toggleExclude = async function(id, isChecked) {
+  try {
+    const item = currentData.find(d => d.id === id);
+    const newStatus = isChecked ? 'excluded' : 'pending';
+    await api.updateDeliveryStatus(id, newStatus);
+    
+    // 배송 제외 시 해당 기사에게 실시간 알림 전송 (api.saveNotice 사용)
+    if (isChecked && item) {
+      await api.saveNotice(String(item.course), `<strong>[배송취소 알림]</strong><br>${item.name} 배송처가 목록에서 제외되었습니다. 해당 주소는 방문하지 마세요.`, []);
+    }
+
+    await loadDashboardData();
+  } catch (e) {
+    console.error("toggleExclude 에러:", e);
+    alert('상태 변경 중 오류가 발생했습니다.');
+  }
+};
+
+function showArrivalAlert(course, eta) {
+  const stack = document.getElementById('arrivalAlertStack');
+  if(!stack) return;
+
+  const courseColor = getCourseColor(course);
+  const card = document.createElement('div');
+  card.className = 'arrival-card traffic-blink-border';
+  card.style.borderLeftColor = courseColor;
+  
+  card.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <strong style="color:${courseColor}; font-size:1.1rem;"><i class="fa-solid fa-truck-ramp-box"></i> ${course}호차 도착 예정</strong>
+      <button onclick="this.parentElement.parentElement.remove()" style="background:none; border:none; cursor:pointer; color:#999;"><i class="fa-solid fa-xmark"></i></button>
     </div>
-    <div style="background: #f8f9fa; padding: 20px; border-radius: 12px; border: 1px solid #eee;">
-      <div style="font-size: 1.1rem; color: var(--text-muted); margin-bottom: 5px;">예상 도착 시간</div>
-      <div style="font-size: 3rem; font-weight: 900; color: var(--primary); letter-spacing: -1px;">${eta}</div>
-    </div>
-    <div style="margin-top: 25px; color: #d63031; font-weight: 600; font-size: 0.95rem;">
-      <i class="fa-solid fa-triangle-exclamation"></i> 하역 준비 및 다음 업무를 준비해주세요.
-    </div>
+    <div style="font-size:1.8rem; font-weight:900; color:var(--primary); margin:5px 0;">${eta}</div>
+    <div style="font-size:0.85rem; color:#d63031; font-weight:600;">하역 준비 및 다음 업무 준비</div>
   `;
   
-  modal.classList.add('active');
+  stack.appendChild(card);
   
+  // 30초 후 자동 삭제
+  setTimeout(() => {
+    if(card.parentNode) card.remove();
+  }, 30000);
+
   // 브라우저 알림 (권한 있을 경우)
   if (Notification.permission === "granted") {
-    new Notification(`차량 도착 알림 - ${course}호차`, {
-      body: `${eta}경 HQ 도착 예정입니다.`,
+    new Notification(`차량 도착 예정 - ${course}호차`, {
+      body: `${eta}경 HQ에 도착할 예정입니다.`,
       icon: '../img/nav_logo.png'
     });
   }
@@ -804,12 +997,7 @@ function handleSelectAll(e) {
 }
 
 // Distance util
-function getDist(lat1, lon1, lat2, lon2) {
-  const p = 0.017453292519943295;
-  const c = Math.cos;
-  const a = 0.5 - c((lat2 - lat1) * p)/2 + c(lat1 * p) * c(lat2 * p) * (1 - c((lon2 - lon1) * p))/2;
-  return 12742 * Math.asin(Math.sqrt(a));
-}
+// distance util removed (redundant)
 
 async function executeAutoRouting() {
   const checkboxes = document.querySelectorAll('.route-checkbox:checked');
@@ -830,27 +1018,29 @@ async function executeAutoRouting() {
     if(item) unassigned.push(item);
   });
 
-  // Assign to courses based on Longitude, then sort by nearest
-  let course1 = unassigned.filter(i => i.longitude < 127.10);
-  let course2 = unassigned.filter(i => i.longitude >= 127.10);
+  // 배송지들을 위도/경도 기준으로 균등하게 분할하여 할당 (K-Means 스타일의 단순 구현)
+  const drivers = await api.getDrivers();
+  const availableCourses = drivers.map(d => String(d.course)).filter(c => c !== "0"); // 관리자 제외
+  
+  if (availableCourses.length === 0) {
+    alert('할당 가능한 기사(코스)가 없습니다. 기사 관리에 기사를 먼저 등록해주세요.');
+    btn.innerHTML = '선택항목 자동 할당 (최적화)'; btn.disabled = false;
+    return;
+  }
 
-  const sortNearest = (arr) => {
-    let sorted = [];
-    let curr = HQ_COORD;
-    while(arr.length > 0) {
-      arr.sort((a,b) => getDist(curr.lat, curr.lng, a.latitude, a.longitude) - getDist(curr.lat, curr.lng, b.latitude, b.longitude));
-      let next = arr.shift();
-      sorted.push(next);
-      curr = {lat: next.latitude, lng: next.longitude};
-    }
-    return sorted;
-  };
-
-  course1 = sortNearest(course1);
-  course2 = sortNearest(course2);
-
-  course1.forEach((item, idx) => routeUpdates.push({ id: item.id, course: "1", order: idx + 1 }));
-  course2.forEach((item, idx) => routeUpdates.push({ id: item.id, course: "2", order: idx + 1 }));
+  // 정렬 (경도 기준)
+  unassigned.sort((a, b) => a.longitude - b.longitude);
+  
+  // 코스 개수만큼 분할
+  const chunkSize = Math.ceil(unassigned.length / availableCourses.length);
+  
+  availableCourses.forEach((course, cIdx) => {
+    let chunk = unassigned.slice(cIdx * chunkSize, (cIdx + 1) * chunkSize);
+    chunk = sortNearest(chunk); // 해당 구역 내에서 최단거리 정렬
+    chunk.forEach((item, idx) => {
+      routeUpdates.push({ id: item.id, course: course, order: idx + 1 });
+    });
+  });
 
   try {
     const res = await api.assignRoutes(routeUpdates);
@@ -949,6 +1139,10 @@ async function runSimulation() {
             window.trafficPolylines.push(p);
           }
         }
+        
+        // 시뮬레이션 시작 시 배송 상태를 '배송중'으로 시각적 변경
+        await api.updateCourseStatus(course, 'delivering');
+        loadDashboardData();
 
         // 차량 아이콘
         const carIcon = L.divIcon({
@@ -968,9 +1162,20 @@ async function runSimulation() {
           }
           marker.setLatLng(routeCoords[i]);
           
+          // 실시간 근접 체크 (배송지 근처 통과 시 팝업 오픈)
+          const courseItems = currentData.filter(d => String(d.course) === String(course) && d.status !== 'done');
+          courseItems.forEach(item => {
+            const dist = getDist(routeCoords[i][0], routeCoords[i][1], item.latitude, item.longitude);
+            if (dist <= 0.1) { // 100m 이내
+              const pinMarker = markers.find(m => m.options.title === String(item.id));
+              if (pinMarker && !pinMarker.isPopupOpen()) {
+                pinMarker.openPopup();
+              }
+            }
+          });
+          
           // 시뮬레이션 중 HQ 도착 알림 (마지막 지점 근처일 때)
           const distToHQ = getDist(routeCoords[i][0], routeCoords[i][1], HQ_COORD.lat, HQ_COORD.lng);
-          // 시뮬레이션 상에서는 약 2km 이내를 15분 전으로 가정 (가시성 위해 조정 가능)
           if (i > routeCoords.length * 0.7 && distToHQ < 2.0 && !alertedArrivals.has(course + '_sim')) {
             showArrivalAlert(course, '시뮬레이션 도착 예정');
             alertedArrivals.add(course + '_sim');

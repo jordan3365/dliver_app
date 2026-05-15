@@ -58,6 +58,17 @@ function setupSheets() {
     sheet3.getRange("A1:E1").setFontWeight("bold").setBackground("#FF7675").setFontColor("white");
     sheet3.setFrozenRows(1);
   }
+
+  // 실시간 위치 시트 생성
+  let sheet4 = ss.getSheetByName('실시간위치');
+  if (!sheet4) {
+    sheet4 = ss.insertSheet('실시간위치');
+  }
+  if (sheet4.getLastRow() === 0) {
+    sheet4.appendRow(['코스', '위도', '경도', '최종갱신']);
+    sheet4.getRange("A1:D1").setFontWeight("bold").setBackground("#0984e3").setFontColor("white");
+    sheet4.setFrozenRows(1);
+  }
 }
 
 // 2. API 통신 처리 (POST)
@@ -84,6 +95,7 @@ function doPost(e) {
     else if (action === 'getNotices') result = getNotices();
     else if (action === 'saveNotice') result = saveNotice(data);
     else if (action === 'deleteNotice') result = deleteNotice(data);
+    else if (action === 'updateDriverLocation') result = updateDriverLocation(data);
     else throw new Error('알 수 없는 Action 입니다.');
     
     return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
@@ -122,6 +134,15 @@ function getDeliveryList(payload) {
   let result = [];
   data.forEach(row => {
     if (row[0]) { // ID가 있는 정상 데이터만
+      let images = [];
+      try {
+        images = row[12] ? JSON.parse(row[12]) : [];
+        if (!Array.isArray(images)) images = images ? [images] : [];
+      } catch (e) {
+        console.error("Image JSON parse error for ID " + row[0] + ": " + e.message);
+        images = row[12] ? [row[12]] : []; // JSON 파싱 실패 시 일반 문자열로 취급
+      }
+      
       result.push({
         id: row[0],
         name: row[1],
@@ -135,7 +156,7 @@ function getDeliveryList(payload) {
         course: row[9] ? String(row[9]) : null,
         order: row[10] || null,
         status: row[11] || 'pending',
-        deliveryPlaceImages: row[12] ? JSON.parse(row[12]) : []
+        deliveryPlaceImages: images
       });
     }
   });
@@ -167,7 +188,8 @@ function updateCourseStatus(payload) {
   let count = 0;
   
   for(let i=1; i<data.length; i++) {
-    if (String(data[i][9]) === String(course) && data[i][11] !== 'done') {
+    // 제외(excluded) 상태이거나 이미 완료(done)된 상태가 아닌 것만 배송중(delivering)으로 변경
+    if (String(data[i][9]) === String(course) && data[i][11] !== 'done' && data[i][11] !== 'excluded') {
       sheet.getRange(i+1, 12).setValue(status);
       count++;
     }
@@ -213,8 +235,21 @@ function uploadImagesToDrive(images, placeId, placeName) {
   if (!images) return [];
   if (!Array.isArray(images)) images = [images];
   if (images.length === 0) return [];
-  const folderId = "1nPwkhHh2AhrfWJs2uR01j4LoUGpS3Kd2";
-  const folder = DriveApp.getFolderById(folderId);
+  // [주의] 아래 folderId는 사용자의 구글 드라이브 폴더 ID로 반드시 변경해야 이미지가 정상 저장됩니다.
+  // 폴더가 없거나 권한이 없으면 에러가 발생할 수 있습니다.
+  const folderId = "1nPwkhHh2AhrfWJs2uR01j4LoUGpS3Kd2"; 
+  let folder;
+  try {
+    folder = DriveApp.getFolderById(folderId);
+  } catch (e) {
+    // 폴더를 찾을 수 없는 경우 루트에 '배송앱_이미지' 폴더 생성 시도
+    const folders = DriveApp.getFoldersByName('배송앱_이미지');
+    if (folders.hasNext()) {
+      folder = folders.next();
+    } else {
+      folder = DriveApp.createFolder('배송앱_이미지');
+    }
+  }
   let savedUrls = [];
   
   for(let i=0; i<images.length; i++) {
@@ -324,18 +359,60 @@ function bulkAddDeliveryPlaces(payload) {
 }
 
 function getDrivers() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('기사목록');
-  const data = sheet.getDataRange().getValues();
-  data.shift();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const driverSheet = ss.getSheetByName('기사목록');
+  const locationSheet = ss.getSheetByName('실시간위치');
   
-  const result = data.filter(r => r[0] > 1).map(r => ({ // admin 제외
-    id: r[0],
-    name: r[1],
-    username: r[2],
-    course: String(r[4]),
-    phone: r[5]
-  }));
+  if (!driverSheet) return { success: true, data: [] };
+  const driverData = driverSheet.getDataRange().getValues();
+  if (driverData.length <= 1) return { success: true, data: [] };
+  driverData.shift();
+  
+  let locationMap = {};
+  if (locationSheet) {
+    const locationData = locationSheet.getDataRange().getValues();
+    for(let i=1; i<locationData.length; i++) {
+      locationMap[String(locationData[i][0])] = {
+        lat: locationData[i][1],
+        lng: locationData[i][2],
+        updated: locationData[i][3]
+      };
+    }
+  }
+  
+  const result = driverData.filter(r => r[0] > 1).map(r => {
+    const course = String(r[4]);
+    return {
+      id: r[0],
+      name: r[1],
+      username: r[2],
+      course: course,
+      phone: r[5],
+      currentLocation: locationMap[course] || null
+    };
+  });
   return { success: true, data: result };
+}
+
+function updateDriverLocation(payload) {
+  const { course, lat, lng } = payload;
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('실시간위치');
+  const data = sheet.getDataRange().getValues();
+  
+  let foundRow = -1;
+  for(let i=1; i<data.length; i++) {
+    if (String(data[i][0]) === String(course)) {
+      foundRow = i + 1;
+      break;
+    }
+  }
+  
+  if (foundRow > 0) {
+    sheet.getRange(foundRow, 2, 1, 3).setValues([[lat, lng, new Date()]]);
+  } else {
+    sheet.appendRow([String(course), lat, lng, new Date()]);
+  }
+  return { success: true };
 }
 
 function addDriver(payload) {
@@ -361,13 +438,21 @@ function getNotices() {
   const data = sheet.getDataRange().getValues();
   data.shift();
   
-  const result = data.map(r => ({
-    id: r[0],
-    target: String(r[1]),
-    content: r[2],
-    images: r[3] ? JSON.parse(r[3]) : [],
-    date: r[4]
-  }));
+  const result = data.map(r => {
+    let images = [];
+    try {
+      images = r[3] ? JSON.parse(r[3]) : [];
+    } catch(e) {
+      images = r[3] ? [r[3]] : [];
+    }
+    return {
+      id: r[0],
+      target: String(r[1]),
+      content: r[2],
+      images: images,
+      date: r[4]
+    };
+  });
   return { success: true, data: result };
 }
 

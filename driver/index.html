@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>착한식판 기사앱</title>
   
   <!-- PWA Manifest & Meta Tags -->
@@ -39,6 +42,7 @@
     
     .btn-group { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 10px;}
     .btn-action { padding: 10px 4px; border-radius: 8px; border: none; font-weight: 600; font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; }
+    .btn-action:disabled { background: #eee !important; color: #bbb !important; cursor: not-allowed; }
     .btn-detail { background: #eee; color: #333; }
     .btn-navi { background: #FEE500; color: #000; }
     .btn-complete { background: var(--success); color: white; }
@@ -215,7 +219,7 @@
         navigator.geolocation.getCurrentPosition(() => {}, () => {}, {timeout: 5000});
       }
       
-      const userStr = sessionStorage.getItem('authUser');
+      const userStr = localStorage.getItem('authUser');
       if (!userStr) { window.location.href = '../index.html'; return; }
       const user = JSON.parse(userStr);
       if (user.role !== 'driver') { window.location.href = '../index.html'; return; }
@@ -225,13 +229,21 @@
 
       // Top Actions
       document.getElementById('btnSearch').addEventListener('click', async () => {
-        await loadDriverData();
-        showDialog('알림', '배송 데이터가 최신으로 갱신되었습니다.');
+        try {
+          await loadDriverData();
+          showDialog('알림', '배송 데이터가 최신으로 갱신되었습니다.');
+        } catch (e) {
+          showDialog('오류', '데이터를 불러오지 못했습니다: ' + e.message);
+        }
       });
       
       document.getElementById('btnAck').addEventListener('click', async () => {
-        await loadDriverData();
-        showDialog('알림', '실시간 배송 경로와 데이터를 확인하였습니다.');
+        try {
+          await loadDriverData();
+          showDialog('알림', '실시간 배송 경로와 데이터를 확인하였습니다.');
+        } catch (e) {
+          showDialog('오류', '데이터 갱신 실패: ' + e.message);
+        }
       });
 
       document.getElementById('btnStartRoute').addEventListener('click', () => {
@@ -258,23 +270,32 @@
             btn.disabled = true;
             btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 처리중';
 
-            await api.updateCourseStatus(currentUserCourse, 'delivering');
-            await loadDriverData();
-            
-            // 첫 번째 배송지 찾기
-            const pendingItems = currentData.filter(d => d.status !== 'done').sort((a,b) => (a.order||99) - (b.order||99));
-            const firstItem = pendingItems.length > 0 ? pendingItems[0] : null;
-
-            if(firstItem) {
-              // 지도 줌인 처리
-              map.setView([firstItem.latitude, firstItem.longitude], 18);
+            const res = await api.updateCourseStatus(currentUserCourse, 'delivering');
+            if (res.success) {
+              await loadDriverData();
               
-              // 즉시 네비게이션 실행
-              setTimeout(() => {
-                openNavi(firstItem.name, firstItem.latitude, firstItem.longitude);
-              }, 800);
+              // 첫 번째 배송지 찾기 (제외된 배송처 제외)
+              const pendingItems = currentData.filter(d => d.status === 'delivering').sort((a,b) => (a.order||99) - (b.order||99));
+              const firstItem = pendingItems.length > 0 ? pendingItems[0] : null;
+
+              if(firstItem) {
+                // 실시간 위치 추적 시작
+                startLocationTracking();
+                
+                // 지도 줌인 처리
+                map.setView([firstItem.latitude, firstItem.longitude], 18);
+                
+                showDialog('배송 시작', '배송 출발 처리가 완료되었습니다. 안전 운전 하세요!');
+                
+                // 즉시 네비게이션 실행
+                setTimeout(() => {
+                  openNavi(firstItem.name, firstItem.latitude, firstItem.longitude);
+                }, 1000);
+              } else {
+                showDialog('알림', '진행할 배송건이 없습니다.');
+              }
             } else {
-              showDialog('알림', '진행할 배송건이 없습니다.');
+              showDialog('오류', '배송 상태 업데이트에 실패했습니다.');
             }
           } catch (e) {
             console.error(e);
@@ -301,14 +322,14 @@
       });
 
       document.getElementById('navMyInfoBtn').addEventListener('click', () => {
-        const user = JSON.parse(sessionStorage.getItem('authUser'));
+        const user = JSON.parse(localStorage.getItem('authUser'));
         document.getElementById('infoName').textContent = user.name + ' 기사님';
         document.getElementById('infoCourse').textContent = `코스 ${user.course} 담당`;
         document.getElementById('myInfoModal').classList.add('active');
       });
 
       document.getElementById('actualLogoutBtn').addEventListener('click', () => {
-        sessionStorage.removeItem('authUser'); window.location.href = '../index.html';
+        localStorage.removeItem('authUser'); window.location.href = '../index.html';
       });
 
       // Photo Upload handling
@@ -355,9 +376,90 @@
       });
 
       initMap();
-      await loadDriverData();
+      try {
+        await loadDriverData();
+      } catch (e) {
+        showDialog('초기화 오류', '배송 데이터를 불러올 수 없습니다: ' + e.message);
+      }
       await checkNotice();
+      
+      // 배송중인 상태라면 자동으로 추적 재개
+      const isDelivering = currentData.some(d => d.status === 'delivering');
+      if (isDelivering) {
+        startLocationTracking();
+      }
     });
+
+    // 실시간 위치 추적 로직
+    let locationWatchId = null;
+    let lastUpdateData = { lat: 0, lng: 0, time: 0 };
+
+    function startLocationTracking() {
+      if (locationWatchId) return; // 이미 실행 중
+
+      // GPS 감시 시작
+      locationWatchId = navigator.geolocation.watchPosition(
+        async (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          const now = Date.now();
+
+          // 5초마다 또는 10m(0.01km) 이상 이동했을 때만 서버 전송 (실시간성 강화)
+          if (now - lastUpdateData.time > 5000 || getDist(lat, lng, lastUpdateData.lat, lastUpdateData.lng) > 0.01) {
+            try {
+              await api.updateDriverLocation(currentUserCourse, lat, lng);
+              lastUpdateData = { lat, lng, time: now };
+              console.log('위치 갱신 성공:', lat, lng);
+
+              // HQ 도착 체크 (모든 배송 완료 후 100m 이내 접근 시)
+              const HQ_COORD = { lat: 37.556898, lng: 127.206401 };
+              const distToHQ = getDist(lat, lng, HQ_COORD.lat, HQ_COORD.lng);
+              const allDone = currentData.length > 0 && currentData.every(d => d.status === 'done');
+              
+              if (allDone && distToHQ < 0.1) { // 100m 이내
+                if (!window.hqArrivalAlerted) {
+                  window.hqArrivalAlerted = true;
+                  showDialog('업무 종료', '본사에 도착하였습니다. 오늘 하루도 고생하셨습니다!', true, () => {
+                    // 앱 종료 처리 (PWA의 경우 창 닫기 시도, 불가 시 로그아웃 후 안내 화면)
+                    localStorage.removeItem('authUser');
+                    document.body.innerHTML = `
+                      <div style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:linear-gradient(135deg, #6C5CE7, #00CEC9); color:white; text-align:center; padding:20px;">
+                        <i class="fa-solid fa-circle-check" style="font-size:80px; margin-bottom:20px;"></i>
+                        <h1>업무가 완료되었습니다</h1>
+                        <p style="margin-top:10px; opacity:0.9;">안전하게 퇴근하시기 바랍니다.</p>
+                        <button onclick="window.close(); location.href='about:blank';" class="btn-primary" style="margin-top:30px; background:white; color:var(--primary);">앱 종료</button>
+                      </div>
+                    `;
+                    if (window.close) window.close();
+                  });
+                }
+              }
+            } catch (e) {
+              console.error('위치 갱신 실패:', e);
+            }
+          }
+        },
+        (err) => {
+          console.error('GPS 에러:', err);
+          if (err.code === 1) { // PERMISSION_DENIED
+            showDialog('GPS 권한 필요', '기사님의 실시간 위치를 관리자에게 공유하려면 GPS 권한이 반드시 필요합니다. 브라우저 설정에서 위치 권한을 허용해주세요.');
+          }
+        },
+        { enableHighAccuracy: true, maximumAge: 10000 }
+      );
+    }
+
+    function getDist(lat1, lon1, lat2, lon2) {
+      if (!lat1 || !lat2) return 999;
+      const R = 6371; // km
+      const dLat = (lat2-lat1) * Math.PI / 180;
+      const dLon = (lon2-lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    }
 
     // 구글 드라이브 URL을 직접 미리보기 가능한 URL로 변환하는 유틸리티 (더 강력한 버전)
     function getDirectImageUrl(url) {
@@ -399,7 +501,7 @@
 
     async function checkNotice() {
       try {
-        const userStr = sessionStorage.getItem('authUser');
+        const userStr = localStorage.getItem('authUser');
         if (!userStr) return;
         const user = JSON.parse(userStr);
         
@@ -417,6 +519,11 @@
             const title = String(notice.target) === 'global' ? '📢 전체 공지사항' : '🚚 코스 전용 공지';
             showDialog(title, notice.content);
             sessionStorage.setItem(storageKey, 'true');
+            
+            // 배송취소 알림인 경우 데이터 즉시 새로고침
+            if (notice.content.includes('배송취소')) {
+              await loadDriverData();
+            }
           }
         }
       } catch (e) {
@@ -425,10 +532,15 @@
     }
 
     async function loadDriverData() {
-      currentData = await api.getDeliveryList(currentUserCourse);
-      currentData.sort((a,b) => (a.order || 99) - (b.order || 99));
-      renderList();
-      await updateMap();
+      try {
+        currentData = await api.getDeliveryList(currentUserCourse);
+        currentData.sort((a,b) => (a.order || 99) - (b.order || 99));
+        renderList();
+        await updateMap();
+      } catch (error) {
+        console.error('loadDriverData error:', error);
+        throw error; // 상위 호출자에서 처리하도록 전달
+      }
     }
 
     function initMap() {
@@ -505,12 +617,12 @@
           const nextItem = pendingItems.length > 0 ? pendingItems[0] : null;
 
           if(nextItem) {
-            // 알림창 닫은 후, 즉시 다음 배송지로 네비게이션 자동 실행
+            // 알림창 닫은 후, 즉시 다음 배송지로 네비게이션 자동 실행 (지연 시간 최소화)
             setTimeout(() => {
               openNavi(nextItem.name, nextItem.latitude, nextItem.longitude);
-            }, 500);
+            }, 100);
           } else {
-            const userStr = sessionStorage.getItem('authUser');
+            const userStr = localStorage.getItem('authUser');
             const user = JSON.parse(userStr);
             api.sendAdminNotification(`[알림] ${user.name} 기사님 (코스 ${user.course}) 모든 배송을 완료하고 복귀합니다.`);
 
@@ -566,23 +678,23 @@
       }
       
       const encodeName = encodeURIComponent(name);
-      // 카카오내비 앱 직접 실행 스킴
+      // 카카오내비 앱 직접 실행 스킴 (ep: 도착지, sp: 출발지 생략 시 현위치)
       const appUrl = `kakaomap://route?ep=${lat},${lng}&by=CAR`;
-      // 웹 길안내 URL (새 창으로 열어 복귀 용이하게 처리)
+      // 웹 길안내 URL (출발지 없이 목적지만 설정하여 현위치 기반 안내 유도)
       const webUrl = `https://map.kakao.com/link/to/${encodeName},${lat},${lng}`;
 
-      // 앱 실행 시도 (모바일 기기 전용)
+      console.log(`Navigating to ${name} (${lat}, ${lng})`);
+
       if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
-          // 앱 실행 시도 후 실패 시 웹으로 자동 전환
+          // 앱 실행 시도 후 실패 시 웹으로 자동 전환 (1.5초 대기)
           const startTime = Date.now();
           setTimeout(function() {
-              if (Date.now() - startTime < 1500) {
-                  window.open(webUrl, '_blank');
+              if (Date.now() - startTime < 2000) {
+                  window.location.href = webUrl;
               }
-          }, 1000);
-          location.href = appUrl;
+          }, 1500);
+          window.location.href = appUrl;
       } else {
-          // PC 환경 등에서는 바로 웹으로 실행
           window.open(webUrl, '_blank');
       }
     };
@@ -604,24 +716,30 @@
         if (item.status === 'done') cardClass = 'done';
         else if (item.status === 'delivering') cardClass = 'delivering';
         
-        card.className = `delivery-card animate-fade-in ${cardClass} ${isActive ? 'active-route' : ''}`;
-
         let statusText = '대기중';
         if(item.status === 'done') statusText = '완료';
         else if(item.status === 'delivering') statusText = '배송중';
+        else if(item.status === 'excluded') {
+            statusText = '배송제외';
+            cardClass = 'excluded';
+        }
+
+        const isExcluded = item.status === 'excluded';
+        card.className = `delivery-card animate-fade-in ${cardClass} ${isActive && !isExcluded ? 'active-route' : ''}`;
+        if(isExcluded) card.style.opacity = '0.5';
 
         card.innerHTML = `
           <div class="card-header">
-            <span class="place-name">${item.order || '-'}순번. ${item.name}</span>
-            <span style="font-size: 0.8rem; color: ${item.status === 'done' ? 'var(--success)' : (item.status==='delivering' ? 'var(--primary)' : 'var(--warning)')}; font-weight:bold;">
+            <span class="place-name" style="${isExcluded ? 'text-decoration:line-through; color:#999;' : ''}">${item.order || '-'}순번. ${item.name}</span>
+            <span style="font-size: 0.8rem; color: ${isExcluded ? '#999' : (item.status === 'done' ? 'var(--success)' : (item.status==='delivering' ? 'var(--primary)' : 'var(--warning)'))}; font-weight:bold;">
               ${statusText}
             </span>
           </div>
           <!-- 주소나 메모는 숨기고 상세보기로 넘김 -->
           <div class="btn-group">
-            <button class="btn-action btn-detail" onclick="showDetail(${item.id})"><i class="fa-solid fa-list"></i> 상세보기</button>
-            <button class="btn-action btn-navi" onclick="openNavi('${item.name}', ${item.latitude}, ${item.longitude})"><i class="fa-solid fa-location-arrow"></i> 길안내</button>
-            <button class="btn-action btn-complete" onclick="completeDelivery(${item.id})" ${item.status === 'done' ? 'disabled' : ''}><i class="fa-solid fa-check"></i> 완료</button>
+            <button class="btn-action btn-detail" onclick="showDetail(${item.id})" ${isExcluded ? 'disabled' : ''}><i class="fa-solid fa-list"></i> 상세보기</button>
+            <button class="btn-action btn-navi" onclick="openNavi('${item.name}', ${item.latitude}, ${item.longitude})" ${isExcluded ? 'disabled' : ''}><i class="fa-solid fa-location-arrow"></i> 길안내</button>
+            <button class="btn-action btn-complete" onclick="completeDelivery(${item.id})" ${item.status === 'done' || isExcluded ? 'disabled' : ''}><i class="fa-solid fa-check"></i> 완료</button>
           </div>
         `;
         listEl.appendChild(card);
@@ -644,6 +762,42 @@
         });
       });
     }
+
+    // 화면 꺼짐 방지 (WakeLock) 및 앱 유지 로직
+    let wakeLock = null;
+    const requestWakeLock = async () => {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch (err) {
+        console.log('WakeLock error:', err);
+      }
+    };
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        requestWakeLock();
+        loadDriverData(); // 돌아왔을 때 데이터 최신화
+      }
+    });
+
+    window.addEventListener('pageshow', (event) => {
+      // bfcache 대응: 뒤로가기로 돌아왔을 때 세션 유지 확인
+      if (event.persisted || (window.performance && window.performance.navigation.type === 2)) {
+        loadDriverData();
+      }
+    });
+
+    // 초기 실행
+    requestWakeLock();
+    initApp();
+
+    // 실시간 공지/취소 및 배송 데이터 체크 (10초 주기)
+    setInterval(async () => {
+      await checkNotice();
+      await loadDriverData();
+    }, 10000);
   </script>
 </body>
 </html>
