@@ -223,11 +223,21 @@
       }
       
       let userStr = localStorage.getItem('authUser');
-      if (!userStr) { 
-        // 일시적인 지연 가능성을 고려하여 재확인 시도
-        userStr = localStorage.getItem('authUser');
+      // 모바일 브라우저 지연 대응: 최대 3회 재시도 (500ms 간격)
+      if (!userStr) {
+        for(let i=0; i<3; i++) {
+          await new Promise(r => setTimeout(r, 500));
+          userStr = localStorage.getItem('authUser');
+          if(userStr) break;
+        }
       }
-      if (!userStr) { window.location.href = '../index.html'; return; }
+
+      if (!userStr) { 
+        console.error('Session not found after retries');
+        window.location.href = '../index.html'; 
+        return; 
+      }
+      
       const user = JSON.parse(userStr);
       if (user.role !== 'driver') { window.location.href = '../index.html'; return; }
       currentUserCourse = user.course;
@@ -842,16 +852,22 @@
     // 포커스 복귀 시 로직 강화 (길안내 종료 후 앱 복귀 대응)
     document.addEventListener('visibilitychange', async () => {
       if (document.visibilityState === 'visible') {
-        console.log('앱 포커스 복귀 - 상태 유지 및 데이터 갱신');
         await requestWakeLock(); // 화면 유지 재요청
         
-        // 세션 유지 확인 및 데이터 즉시 갱신
-        const userStr = localStorage.getItem('authUser');
+        // 세션 유지 확인 및 데이터 즉시 갱신 (지연 대응)
+        let userStr = localStorage.getItem('authUser');
+        if (!userStr) {
+          await new Promise(r => setTimeout(r, 1000)); // 1초 대기 후 재확인
+          userStr = localStorage.getItem('authUser');
+        }
+
         if (userStr) {
           await loadDriverData();
           await checkNotice();
         } else {
-          window.location.href = '../index.html'; // 세션 유실 시에만 이동
+          // 세션이 정말 없을 때만 로그아웃 처리
+          console.warn('Session confirmed lost, redirecting...');
+          window.location.href = '../index.html';
         }
       }
     });
