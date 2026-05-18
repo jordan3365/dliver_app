@@ -49,7 +49,7 @@
     .btn-complete:disabled { background: #ccc; }
 
     /* Custom Map Pin */
-    .map-pin { position: relative; width: 30px; height: 40px; }
+    .map-pin { position: relative; width: 30px; height: 40px; background: transparent !important; border: none !important; }
     .map-pin i { font-size: 30px; text-shadow: 1px 1px 2px rgba(0,0,0,0.5); }
     .map-pin span { position: absolute; top: 5px; left: 50%; transform: translateX(-50%); color: white; font-weight: bold; font-size: 12px; font-family: sans-serif; }
 
@@ -264,8 +264,9 @@
       });
 
       document.getElementById('btnStartRoute').addEventListener('click', () => {
-        const totalCount = currentData.length;
-        const totalBox = currentData.reduce((acc, cur) => acc + (parseInt(cur.boxCount) || 0), 0);
+        const activeData = currentData.filter(d => d.status !== 'excluded');
+        const totalCount = activeData.length;
+        const totalBox = activeData.reduce((acc, cur) => acc + (parseInt(cur.boxCount) || 0), 0);
         const totalTime = totalCount * 15; // 1건당 평균 15분 가정
         const hours = Math.floor(totalTime / 60);
         const mins = totalTime % 60;
@@ -516,13 +517,36 @@
       return points;
     }
 
+    let sysVoices = [];
+    if (window.speechSynthesis) {
+      window.speechSynthesis.onvoiceschanged = () => {
+        sysVoices = window.speechSynthesis.getVoices();
+      };
+      sysVoices = window.speechSynthesis.getVoices();
+    }
+
     // TTS 음성 안내 함수
     function speak(text) {
       if (!window.speechSynthesis) return;
       window.speechSynthesis.cancel(); // 이전 음성 중단
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = 'ko-KR';
+      
+      // 자연스러운 한국어 목소리 찾기
+      if (sysVoices.length === 0) sysVoices = window.speechSynthesis.getVoices();
+      const preferredVoices = ['Google 한국의', 'Microsoft SunHi', 'Microsoft InJoon', 'Yuna', 'Sora'];
+      let selectedVoice = null;
+      
+      for (let pref of preferredVoices) {
+        selectedVoice = sysVoices.find(v => v.lang.includes('ko') && v.name.includes(pref));
+        if (selectedVoice) break;
+      }
+      if (!selectedVoice) selectedVoice = sysVoices.find(v => v.lang.includes('ko'));
+      
+      if (selectedVoice) utterance.voice = selectedVoice;
+      
       utterance.rate = 1.0;
+      utterance.pitch = 1.0;
       window.speechSynthesis.speak(utterance);
     }
 
@@ -630,17 +654,25 @@
 
       currentData.forEach(item => {
         if (item.latitude && item.longitude) {
-          let pinColor = item.status === 'done' ? '#b2bec3' : '#0984e3';
-          let orderText = item.order ? item.order : '-';
-          const pinIcon = L.divIcon({
-            className: 'map-pin',
-            html: `<i class="fa-solid fa-location-pin" style="color: ${pinColor};"></i><span>${orderText}</span>`,
-            iconSize: [30, 40], iconAnchor: [15, 40]
-          });
-          const marker = L.marker([item.latitude, item.longitude], {icon: pinIcon}).addTo(map);
-          markers.push(marker);
-          bounds.push([item.latitude, item.longitude]);
-          rawPoints.push([item.latitude, item.longitude]);
+          try {
+            let lat = parseFloat(item.latitude);
+            let lng = parseFloat(item.longitude);
+            if (isNaN(lat) || isNaN(lng)) throw new Error("Invalid coordinates");
+
+            let pinColor = item.status === 'done' ? '#b2bec3' : '#0984e3';
+            let orderText = item.order ? item.order : '-';
+            const pinIcon = L.divIcon({
+              className: 'map-pin',
+              html: `<i class="fa-solid fa-location-dot" style="color: ${pinColor};"></i><span>${orderText}</span>`,
+              iconSize: [30, 40], iconAnchor: [15, 40]
+            });
+            const marker = L.marker([lat, lng], {icon: pinIcon}).addTo(map);
+            markers.push(marker);
+            bounds.push([lat, lng]);
+            rawPoints.push([lat, lng]);
+          } catch(e) {
+            console.warn(`마커 렌더링 실패 (ID: ${item.id}):`, e);
+          }
         }
       });
 
@@ -753,6 +785,9 @@
       console.log(`Navigating to ${name} (${lat}, ${lng})`);
 
       if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+          // 뒤로가기 시 로그아웃(index.html로 이동) 방지를 위한 더미 히스토리 추가
+          history.pushState({navi: 'running'}, '', '');
+          
           // 앱 실행 시도 후 실패 시 웹으로 자동 전환 (1.5초 대기)
           const startTime = Date.now();
           setTimeout(function() {
@@ -765,6 +800,14 @@
           window.open(webUrl, '_blank');
       }
     };
+    
+    // 더미 히스토리 팝 이벤트를 감지하여 데이터 새로고침만 수행하고 페이지 이탈 방지
+    window.addEventListener('popstate', (e) => {
+      console.log('뒤로가기 감지, 로그아웃 방지 처리');
+      requestWakeLock();
+      loadDriverData();
+      checkNotice();
+    });
 
     function renderList() {
       const listEl = document.getElementById('deliveryList');
@@ -838,7 +881,6 @@
           wakeLock = await navigator.wakeLock.request('screen');
           console.log('WakeLock 활성화됨');
           
-          // WakeLock 해제 시 자동 재요청
           wakeLock.addEventListener('release', () => {
             console.log('WakeLock 해제됨, 재요청 시도...');
             if (document.visibilityState === 'visible') requestWakeLock();
@@ -847,6 +889,20 @@
       } catch (err) {
         console.log('WakeLock error:', err);
       }
+      
+      // 강력한 화면 꺼짐 방지 (NoSleep 비디오 재생 대안)
+      let video = document.getElementById('wakeLockVideo');
+      if (!video) {
+        video = document.createElement('video');
+        video.id = 'wakeLockVideo';
+        video.setAttribute('playsinline', '');
+        video.setAttribute('muted', '');
+        video.setAttribute('loop', '');
+        video.style.display = 'none';
+        video.src = 'data:video/mp4;base64,AAAAHGZ0eXBtcDQyAAAAAW1wNDJpc29tAAAAE21vb3YAAABsbXZoZAAAAADA/PjvwPz47wAAADIAAAACAAACQHRyYWsAAABcdGtoZAAAAAHA/PjvwPz47wAAAAEAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAIAAAAAAAACAAAAAAAAAAAABsbWRpYQAAACBtZGhkAAAAAMD8+O/A/PjvAAAAIAAAAAIAAAACAAAAMWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAAUMW1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAABAAAAEHVybCAAAAABAAABaHN0YmwAAABTc3RzZAAAAAAAAAABAAAADWF2YzEAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAIAAgAEgAAABIAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY//8AAAAxYXZjQwH0AAr/4QAZZ/QACq609NQLQIgAAAAAAAEAAQAAAQhI2xKAAAAGYnBzcAAAAAAACnN0dHMAAAAAAAAAAQAAAAEAAAACAAAAFHN0c3MAAAAAAAAAAQAAAAEAAAAUc3RzYwAAAAAAAAABAAAAAQAAAAEAAAABAAAAFHN0c3oAAAAAAAAA/wAAAAEAAAAUc3RjbwAAAAAAAAABAAAAMAAAADJ1ZHRhAAAAKm1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXIAAAAAAAAAAAAAAAAA';
+        document.body.appendChild(video);
+      }
+      video.play().catch(e => console.log('Video play failed', e));
     };
 
     // 포커스 복귀 시 로직 강화 (길안내 종료 후 앱 복귀 대응)
@@ -878,8 +934,11 @@
       }
     });
 
-    // 초기 실행 시 강력한 화면 유지 요청
     window.addEventListener('load', () => {
+      // 터치 시 비디오 재생 및 WakeLock 권한 확보 유도
+      document.body.addEventListener('touchstart', () => {
+        if (!wakeLock && document.visibilityState === 'visible') requestWakeLock();
+      }, {once:true});
       requestWakeLock();
       initApp();
     });

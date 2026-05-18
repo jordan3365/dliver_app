@@ -96,6 +96,7 @@ function doPost(e) {
     else if (action === 'saveNotice') result = saveNotice(data);
     else if (action === 'deleteNotice') result = deleteNotice(data);
     else if (action === 'updateDriverLocation') result = updateDriverLocation(data);
+    else if (action === 'updateBoxCount') result = updateBoxCount(data);
     else throw new Error('알 수 없는 Action 입니다.');
     
     return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
@@ -146,6 +147,18 @@ function getDeliveryList(payload) {
         images = row[12] ? [row[12]] : []; // JSON 파싱 실패 시 일반 문자열로 취급
       }
       
+      let rawLat = row[7];
+      let rawLng = row[8];
+      
+      // 사용자가 위도(H열) 셀에 탭, 공백, 콤마로 위/경도를 한 번에 붙여넣은 경우 자동 분리
+      if (typeof rawLat === 'string' && (rawLat.includes(',') || rawLat.includes(' ') || rawLat.includes('\t'))) {
+        const parts = rawLat.match(/-?\d+\.\d+/g);
+        if (parts && parts.length >= 2) {
+          rawLat = parts[0];
+          rawLng = parts[1];
+        }
+      }
+
       result.push({
         id: row[0],
         name: row[1],
@@ -154,8 +167,8 @@ function getDeliveryList(payload) {
         phone: row[4],
         memo: row[5],
         boxCount: row[6],
-        latitude: row[7],
-        longitude: row[8],
+        latitude: rawLat,
+        longitude: rawLng,
         course: row[9] ? String(row[9]) : null,
         order: row[10] || null,
         status: row[11] || 'pending',
@@ -178,6 +191,20 @@ function updateDeliveryStatus(payload) {
   for(let i=1; i<data.length; i++) {
     if (data[i][0] == id) {
       sheet.getRange(i+1, 12).setValue(status); // L열: 배송상태
+      return { success: true };
+    }
+  }
+  throw new Error('배송처를 찾을 수 없습니다.');
+}
+
+function updateBoxCount(payload) {
+  const { id, boxCount } = payload;
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('배송목록');
+  const data = sheet.getDataRange().getValues();
+  
+  for(let i=1; i<data.length; i++) {
+    if (data[i][0] == id) {
+      sheet.getRange(i+1, 7).setValue(boxCount); // G열: 박스수량
       return { success: true };
     }
   }
@@ -474,7 +501,7 @@ function saveNotice(payload) {
     }
   }
   
-  const newId = sheet.getLastRow() > 0 ? sheet.getLastRow() + 1 : 1;
+  const newId = new Date().getTime(); // 항상 새로운 ID 부여하여 기사앱에서 새로운 알림으로 인지되도록 함
   sheet.appendRow([
     newId,
     target,

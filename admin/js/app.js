@@ -30,7 +30,9 @@ const COURSE_COLORS = {
 };
 
 function getCourseColor(course) {
-  return COURSE_COLORS[String(course)] || "#2d3436"; // Default dark grey
+  const match = String(course).match(/\d+/);
+  const numStr = match ? match[0] : String(course).trim();
+  return COURSE_COLORS[numStr] || "#2d3436"; // Default dark grey
 }
 
 // 구글 드라이브 URL을 직접 미리보기 가능한 URL로 변환하는 유틸리티 (더 강력한 버전)
@@ -490,8 +492,12 @@ function renderDashboardList(data) {
         </div>
         ${badgeHtml}
       </div>
-      <div style="font-size: 0.75rem; color: var(--text-muted); margin-left: 22px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; ${isExcluded ? 'text-decoration:line-through; opacity:0.5;' : ''}">
-        [${item.course}호차] ${item.address1}
+      <div style="font-size: 0.75rem; color: var(--text-muted); margin-left: 22px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:flex; justify-content:space-between; align-items:center; ${isExcluded ? 'text-decoration:line-through; opacity:0.5;' : ''}">
+        <span>[${item.course}호차]</span>
+        <span style="display:flex; align-items:center; gap:4px; background:#e2e8f0; padding:2px 6px; border-radius:4px; font-weight:bold; color:#333;">
+          <i class="fa-solid fa-box"></i>
+          <input type="number" value="${item.boxCount || 0}" min="0" style="width:40px; padding:2px; border:1px solid #ccc; border-radius:3px; text-align:center;" onclick="event.stopPropagation();" onchange="window.adminUpdateBoxCount(${item.id}, this.value, event)">
+        </span>
       </div>
     `;
     li.addEventListener('click', () => {
@@ -548,30 +554,38 @@ async function updateMapMarkers(data, drivers = []) {
 
       const pinIcon = L.divIcon({
         className: classNames,
-        html: `<i class="fa-solid fa-location-pin" style="color: ${pinColor}; ${item.status === 'done' || isExcluded ? 'opacity:0.6;' : ''}"></i><span style="${isExcluded ? 'color:#636e72;' : ''}">${orderText}</span>`,
+        html: `<i class="fa-solid fa-location-dot" style="color: ${pinColor}; ${item.status === 'done' || isExcluded ? 'opacity:0.6;' : ''}"></i><span style="${isExcluded ? 'color:#636e72;' : ''}">${orderText}</span>`,
         iconSize: [32, 42], iconAnchor: [16, 42], popupAnchor: [0, -42]
       });
 
-      const marker = L.marker([item.latitude, item.longitude], {icon: pinIcon, title: String(item.id)}).addTo(map);
-      
-      let statusBadgeClass = item.status === 'done' ? 'badge-done' : (isExcluded ? 'badge-pending' : 'badge-pending');
-      let statusLabel = item.status === 'done' ? '완료' : (isExcluded ? '제외' : '대기중');
-      let statusStyle = isExcluded ? 'background:#eee; color:#999; border:1px solid #ddd;' : '';
+      try {
+        let lat = parseFloat(item.latitude);
+        let lng = parseFloat(item.longitude);
+        if (isNaN(lat) || isNaN(lng)) throw new Error("Invalid coordinates");
 
-      marker.bindPopup(`
-        <div style="text-align:center; ${isExcluded ? 'opacity:0.7;' : ''}">
-          <h4 style="margin:0 0 5px 0; ${isExcluded ? 'text-decoration:line-through; color:#999;' : ''}">${item.name}</h4>
-          <span class="badge ${statusBadgeClass}" style="${statusStyle}">${statusLabel}</span><br>
-          <small>코스: ${item.course} | 순번: ${item.order || '-'}</small><br>
-          <small>${item.address1}</small>
-        </div>
-      `, { autoClose: false, closeOnClick: false });
-      
-      markers.push(marker);
-      bounds.push([item.latitude, item.longitude]);
+        const marker = L.marker([lat, lng], {icon: pinIcon, title: String(item.id)}).addTo(map);
+        
+        let statusBadgeClass = item.status === 'done' ? 'badge-done' : (isExcluded ? 'badge-pending' : 'badge-pending');
+        let statusLabel = item.status === 'done' ? '완료' : (isExcluded ? '제외' : '대기중');
+        let statusStyle = isExcluded ? 'background:#eee; color:#999; border:1px solid #ddd;' : '';
 
-      if (isNextDest && (isFirstLoad || newlyAddedDestIds.includes(item.id))) {
-        setTimeout(() => marker.openPopup(), 100);
+        marker.bindPopup(`
+          <div style="text-align:center; ${isExcluded ? 'opacity:0.7;' : ''}">
+            <h4 style="margin:0 0 5px 0; ${isExcluded ? 'text-decoration:line-through; color:#999;' : ''}">${item.name}</h4>
+            <span class="badge ${statusBadgeClass}" style="${statusStyle}">${statusLabel}</span><br>
+            <small>코스: ${item.course} | 순번: ${item.order || '-'}</small><br>
+            <small>${item.address1}</small>
+          </div>
+        `, { autoClose: false, closeOnClick: false });
+        
+        markers.push(marker);
+        bounds.push([lat, lng]);
+
+        if (isNextDest && (isFirstLoad || newlyAddedDestIds.includes(item.id))) {
+          setTimeout(() => marker.openPopup(), 100);
+        }
+      } catch (e) {
+        console.warn(`마커 생성 실패 (ID: ${item.id}):`, e);
       }
     }
   });
@@ -743,9 +757,13 @@ function updateVehicleStatus(data, drivers = []) {
               ${traffic.text}
             </span>
           </div>
+          <div style="display:flex; justify-content:space-between; color:var(--text-main); align-items:center; margin-bottom:4px;">
+            <span>예상 소요 시간</span>
+            <strong>약 ${totalMin}분 <span style="font-size:0.75rem; color:#d63031;">${traffic.delay > 0 ? '(+'+traffic.delay+'분)' : ''}</span></strong>
+          </div>
           <div style="display:flex; justify-content:space-between; color:var(--text-main); align-items:center;">
-            <span>예상 복귀 시간</span>
-            <strong style="font-size:1.1rem;">${etaTime} <span style="font-size:0.75rem; color:#d63031;">${traffic.delay > 0 ? '(+'+traffic.delay+'분)' : ''}</span></strong>
+            <span>도착 예정 시간</span>
+            <strong style="font-size:1.1rem; color:var(--primary);">${etaTime}</strong>
           </div>
         </div>
       `;
@@ -831,6 +849,24 @@ window.adminStartCourse = async function(course) {
     loadDashboardData();
   } catch(e) {
     alert('배송 시작 처리 중 오류가 발생했습니다.');
+  }
+};
+
+window.adminUpdateBoxCount = async function(id, count, event) {
+  event.stopPropagation();
+  try {
+    const item = currentData.find(d => d.id === id);
+    if (!item) return;
+    await api.updateBoxCount(id, count);
+    
+    // 기사앱에 실시간으로 반영하도록 알림 전송 (업데이트 신호용 백그라운드)
+    await api.saveNotice(String(item.course), `<strong>[수량변경 알림]</strong><br>${item.name}의 수량이 ${count}박스로 변경되었습니다. [데이터 갱신 트리거]`, []);
+    
+    // 화면상 수량 임시 갱신
+    item.boxCount = count;
+    showToast(`박스 수량이 ${count}개로 변경되었습니다.`);
+  } catch(e) {
+    alert('수량 변경에 실패했습니다.');
   }
 };
 
@@ -1163,6 +1199,37 @@ async function runSimulation() {
       if (data.code === 'Ok') {
         const routeCoords = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
         const courseColor = getCourseColor(course);
+        
+        // 배송처별 예상 소요시간 계산 (OSRM legs 활용)
+        const legs = data.routes[0].legs || [];
+        let accumulatedSecs = 0;
+        
+        courseData.forEach((item, idx) => {
+          if (legs[idx]) {
+            accumulatedSecs += legs[idx].duration; // 이동 시간
+          }
+          let etaMins = Math.round(accumulatedSecs / 60);
+          
+          let now = new Date();
+          now.setMinutes(now.getMinutes() + etaMins);
+          let etaTime = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
+          
+          const pinMarker = markers.find(m => m.options.title === String(item.id));
+          if (pinMarker) {
+            pinMarker.setPopupContent(`
+              <div style="text-align:center;">
+                <h4 style="margin:0 0 5px 0;">${item.name}</h4>
+                <div style="background:#fff3cd; color:#856404; padding:3px 6px; border-radius:4px; font-weight:bold; font-size:0.8rem; margin-bottom:5px;">
+                  <i class="fa-solid fa-clock"></i> 예상: ${etaTime} (약 ${etaMins}분 소요)
+                </div>
+                <span class="badge badge-pending">대기중</span><br>
+                <small>코스: ${item.course} | 순번: ${item.order || '-'}</small><br>
+                <small>${item.address1}</small>
+              </div>
+            `);
+          }
+          accumulatedSecs += 600; // 배송지 체류 시간 (10분)
+        });
         
         // 경로 표시
         const poly = L.polyline(routeCoords, {color: courseColor, weight: 5, opacity: 0.6}).addTo(map);
