@@ -994,21 +994,11 @@
     }
 
     // 배송 완료 서명 모달 오픈
-    window.completeDelivery = function(id) {
-      currentCompletingPlaceId = id;
-      document.getElementById('signatureModal').classList.add('active');
-      setTimeout(() => {
-        if (sigCanvas) sigCtx.clearRect(0, 0, sigCanvas.width, sigCanvas.height);
-      }, 100);
-    };
-
-    // 서명 확인 및 오프라인 강건 모드 동기화 바인딩
-    document.getElementById('confirmSigBtn').addEventListener('click', async () => {
-      const id = currentCompletingPlaceId;
+    // 배송 완료 즉시 처리 (서명패드 없이 완료)
+    window.completeDelivery = async function(id) {
       if (!id) return;
       
-      const sigBase64 = sigCanvas.toDataURL();
-      document.getElementById('signatureModal').classList.remove('active');
+      const sigBase64 = ""; // 서명 없이 완료하므로 공백 서명 처리
       
       // 오프라인 대응 모드 감지 (Robust Offline Caching)
       if (!navigator.onLine) {
@@ -1016,7 +1006,7 @@
         queue.push({ id: id, signature: sigBase64, timestamp: Date.now() });
         localStorage.setItem('offlineQueue', JSON.stringify(queue));
         
-        // 로컬 UI 즉각 반영 (네트워크 차단 시 사용자가 멈추지 않고 운행 가능하도록 보장)
+        // 로컬 UI 즉각 반영
         const item = currentData.find(d => d.id === id);
         if (item) item.status = 'done';
         
@@ -1037,14 +1027,13 @@
           const item = currentData.find(d => d.id === id);
           if (item) {
             item.status = 'done';
-            // 서명 업로드 (고객 서명을 검증 이미지 리스트에 자동 추가)
+            // 서명이 없으므로 이미지 리스트를 유지한 채 업데이트
             let images = item.deliveryPlaceImages ? [...item.deliveryPlaceImages] : [];
-            images.push(sigBase64);
             const updatedPlace = { ...item, deliveryPlaceImages: images };
             await api.updateDeliveryPlace(updatedPlace);
           }
           
-          showToast("✅ 배송 완료 및 서명 업로드 성공!");
+          showToast("✅ 배송 완료 처리 성공!");
           checkNextDeliveryAndNavigate(id);
           renderList();
           await updateMap();
@@ -1052,6 +1041,11 @@
       } catch (err) {
         showDialog("오류", "배송 완료 전송 실패: " + err.message);
       }
+    };
+
+    // 기존 서명 확인 버튼 바인딩 (이전 잔재 코드 오류 방지용 유지)
+    document.getElementById('confirmSigBtn').addEventListener('click', () => {
+      document.getElementById('signatureModal').classList.remove('active');
     });
 
     function checkNextDeliveryAndNavigate(completedId) {
@@ -1302,9 +1296,6 @@
         if (userStr) {
           await loadDriverData();
           await checkNotice();
-        } else {
-          console.warn('Session confirmed lost, redirecting...');
-          window.location.href = '../index.html';
         }
       }
     });
