@@ -822,7 +822,17 @@
 
     function speak(text) {
       if (!window.speechSynthesis) return;
-      window.speechSynthesis.cancel(); 
+      
+      // 모바일 사파리/크롬 Speech 락 해제를 위한 무음 큐 삽입
+      try {
+        window.speechSynthesis.cancel();
+        const silentUtterance = new SpeechSynthesisUtterance("");
+        silentUtterance.lang = 'ko-KR';
+        window.speechSynthesis.speak(silentUtterance);
+      } catch (e) {
+        console.warn("Speech silent unlock failed", e);
+      }
+
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = 'ko-KR';
       
@@ -840,6 +850,13 @@
       
       utterance.rate = 1.0;
       utterance.pitch = 1.0;
+
+      // 스피치 실패 시 캔슬 복구 안전핀
+      utterance.onerror = (event) => {
+        console.warn("TTS Speech Error detected, resetting queue:", event.error);
+        window.speechSynthesis.cancel();
+      };
+      
       window.speechSynthesis.speak(utterance);
     }
 
@@ -1399,13 +1416,15 @@
     const requestWakeLock = async () => {
       try {
         if ('wakeLock' in navigator) {
-          wakeLock = await navigator.wakeLock.request('screen');
-          console.log('WakeLock 활성화됨');
-          
-          wakeLock.addEventListener('release', () => {
-            console.log('WakeLock 해제됨, 재요청 시도...');
-            if (document.visibilityState === 'visible') requestWakeLock();
-          });
+          if (!wakeLock || wakeLock.released) {
+            wakeLock = await navigator.wakeLock.request('screen');
+            console.log('WakeLock 활성화됨');
+            
+            wakeLock.addEventListener('release', () => {
+              console.log('WakeLock 해제됨, 재요청 시도...');
+              if (document.visibilityState === 'visible') requestWakeLock();
+            });
+          }
         }
       } catch (err) {
         console.log('WakeLock error:', err);
@@ -1424,6 +1443,13 @@
       }
       video.play().catch(e => console.log('Video play failed', e));
     };
+
+    // 10초 주기적 백그라운드 WakeLock 감시 및 복구 인터벌
+    setInterval(() => {
+      if (document.visibilityState === 'visible' && (!wakeLock || wakeLock.released)) {
+        requestWakeLock();
+      }
+    }, 10000);
 
     document.addEventListener('visibilitychange', async () => {
       if (document.visibilityState === 'visible') {
@@ -1449,9 +1475,13 @@
     });
 
     window.addEventListener('load', () => {
-      document.body.addEventListener('touchstart', () => {
-        if (!wakeLock && document.visibilityState === 'visible') requestWakeLock();
-      }, {once:true});
+      // 터치나 클릭 시점마다 풀려있는 wakeLock 복원 및 미디어 활성화 강제 갱신
+      const refreshWakeLock = () => {
+        if (document.visibilityState === 'visible') requestWakeLock();
+      };
+      document.body.addEventListener('touchstart', refreshWakeLock);
+      document.body.addEventListener('click', refreshWakeLock);
+      
       requestWakeLock();
       if(window.initApp) window.initApp();
     });
