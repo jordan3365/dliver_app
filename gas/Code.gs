@@ -15,6 +15,21 @@
  * 10. 발급된 '웹 앱 URL'을 복사하여 프론트엔드의 api.js 파일에 연동합니다.
  */
 
+// 비밀번호 단방향 암호화 (SHA-256) 헬퍼 함수
+function hashPassword(password) {
+  if (!password) return '';
+  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(password), Utilities.Charset.UTF_8);
+  let hexString = '';
+  for (let i = 0; i < digest.length; i++) {
+    let byteVal = digest[i];
+    if (byteVal < 0) byteVal += 256;
+    let byteString = byteVal.toString(16);
+    if (byteString.length == 1) byteString = '0' + byteString;
+    hexString += byteString;
+  }
+  return hexString;
+}
+
 // 1. 초기 시트 및 한글 컬럼 세팅 함수
 function setupSheets() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -42,10 +57,10 @@ function setupSheets() {
     sheet2.getRange("A1:G1").setFontWeight("bold").setBackground("#00CEC9").setFontColor("white");
     sheet2.setFrozenRows(1);
     
-    // 기본 관리자 및 테스트 기사 세팅
-    sheet2.appendRow([1, '최고관리자', 'admin', 'admin', '0', '010-0000-0000', new Date()]);
-    sheet2.appendRow([2, '김기사', 'driver1', '1111', '1', '010-1111-1111', new Date()]);
-    sheet2.appendRow([3, '이기사', 'driver2', '1111', '2', '010-2222-2222', new Date()]);
+    // 기본 관리자 및 테스트 기사 세팅 (암호화 적용)
+    sheet2.appendRow([1, '최고관리자', 'admin', hashPassword('admin'), '0', '010-0000-0000', new Date()]);
+    sheet2.appendRow([2, '김기사', 'driver1', hashPassword('1111'), '1', '010-1111-1111', new Date()]);
+    sheet2.appendRow([3, '이기사', 'driver2', hashPassword('1111'), '2', '010-2222-2222', new Date()]);
   }
 
   // 공지사항 시트 생성
@@ -72,9 +87,13 @@ function setupSheets() {
 }
 
 // 2. API 통신 처리 (POST)
-// 주의: 프론트엔드에서 fetch 시 Content-Type을 'text/plain'으로 보내야 CORS 에러가 발생하지 않습니다.
+// 보안과 무결성을 극대화하기 위해 API 호출 전체 영역을 LockService로 트랜잭션 잠금 처리합니다.
 function doPost(e) {
+  const lock = LockService.getScriptLock();
   try {
+    // 동시 쓰기로 인한 데이터 충돌 방지: 최대 30초 대기
+    lock.waitLock(30000);
+    
     const payload = JSON.parse(e.postData.contents);
     const action = payload.action;
     const data = payload.data;
@@ -103,6 +122,13 @@ function doPost(e) {
     
   } catch(error) {
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: error.message })).setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    // 락 해제
+    try {
+      lock.releaseLock();
+    } catch(e) {
+      console.error("Lock release error: " + e.message);
+    }
   }
 }
 
@@ -119,7 +145,11 @@ function login(payload) {
   
   for(let i=0; i<data.length; i++) {
     let row = data[i];
-    if (row[2] === username && String(row[3]) === String(password)) {
+    let storedPassword = String(row[3]);
+    let inputPassword = String(password);
+    
+    // 이전 평문 비밀번호 및 해시 비밀번호 둘 다 허용하여 백워드 호환성 보장
+    if (row[2] === username && (storedPassword === inputPassword || storedPassword === hashPassword(inputPassword))) {
       if (username === 'admin') {
         return { success: true, data: { role: 'admin', name: row[1], token: 'real-admin-token' } };
       } else {
@@ -265,14 +295,13 @@ function uploadImagesToDrive(images, placeId, placeName) {
   if (!images) return [];
   if (!Array.isArray(images)) images = [images];
   if (images.length === 0) return [];
-  // [주의] 아래 folderId는 사용자의 구글 드라이브 폴더 ID로 반드시 변경해야 이미지가 정상 저장됩니다.
-  // 폴더가 없거나 권한이 없으면 에러가 발생할 수 있습니다.
+  
+  // [주의] 아래 folderId는 사용자의 구글 드라이브 폴더 ID로 변경해 주셔야 이상적으로 관리됩니다.
   const folderId = "1nPwkhHh2AhrfWJs2uR01j4LoUGpS3Kd2"; 
   let folder;
   try {
     folder = DriveApp.getFolderById(folderId);
   } catch (e) {
-    // 폴더를 찾을 수 없는 경우 루트에 '배송앱_이미지' 폴더 생성 시도
     const folders = DriveApp.getFoldersByName('배송앱_이미지');
     if (folders.hasNext()) {
       folder = folders.next();
@@ -294,7 +323,6 @@ function uploadImagesToDrive(images, placeId, placeName) {
     let blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mime, `${placeId}_${placeName}_${i+1}`);
     let file = folder.createFile(blob);
     file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    // 가장 호환성이 좋은 googleusercontent URL 형식으로 저장 (미리보기 안정성 확보)
     savedUrls.push(`https://lh3.googleusercontent.com/d/${file.getId()}`);
   }
   return savedUrls;
@@ -332,7 +360,6 @@ function updateDeliveryPlace(payload) {
   const data = sheet.getDataRange().getValues();
   const idToUpdate = payload.id;
   
-  // 드라이브에 이미지 저장 (신규 업로드된 Base64만 파일로 생성됨)
   const finalImages = uploadImagesToDrive(payload.deliveryPlaceImages, idToUpdate, payload.name);
   
   for(let i=1; i<data.length; i++) {
@@ -346,7 +373,6 @@ function updateDeliveryPlace(payload) {
       sheet.getRange(rowNum, 7).setValue(payload.boxCount || 1);
       sheet.getRange(rowNum, 8).setValue(payload.latitude || '');
       sheet.getRange(rowNum, 9).setValue(payload.longitude || '');
-      // 할당코스와 배송순번 업데이트 (모달에서 입력된 값 반영)
       sheet.getRange(rowNum, 10).setValue(payload.course || '');
       sheet.getRange(rowNum, 11).setValue(payload.order || '');
       
@@ -383,7 +409,7 @@ function bulkAddDeliveryPlaces(payload) {
     ];
   });
   
-  // 대량 삽입을 위해 getRange -> setValues 사용 (성능 최적화)
+  // 대량 삽입 성능 최적화: setValues 대형 1회 호출
   sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
   return { success: true, count: rows.length };
 }
@@ -410,7 +436,7 @@ function getDrivers() {
     }
   }
   
-  const result = driverData.filter(r => r[0] > 1).map(r => {
+  const result = driverData.filter(r => r[0] !== "").map(r => {
     const course = String(r[4]);
     return {
       id: r[0],
@@ -454,7 +480,7 @@ function addDriver(payload) {
     newId,
     payload.name,
     payload.username,
-    '1111', // 초기 임시 비밀번호
+    hashPassword('1111'), // 초기 임시 비밀번호 암호화 저장
     payload.course,
     payload.phone || '',
     new Date()
@@ -489,7 +515,7 @@ function getNotices() {
 function saveNotice(payload) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('공지사항');
   const data = sheet.getDataRange().getValues();
-  const target = String(payload.target); // 'global' or '1', '2'...
+  const target = String(payload.target);
   
   // 이미지 업로드
   const finalImages = uploadImagesToDrive(payload.images, target, "notice");
@@ -501,7 +527,7 @@ function saveNotice(payload) {
     }
   }
   
-  const newId = new Date().getTime(); // 항상 새로운 ID 부여하여 기사앱에서 새로운 알림으로 인지되도록 함
+  const newId = new Date().getTime(); // 신규 ID 발송 트리거링
   sheet.appendRow([
     newId,
     target,

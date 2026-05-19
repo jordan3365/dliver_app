@@ -188,13 +188,54 @@
     }
     .arrival-card.traffic-blink-border { animation: trafficBlink 2s infinite, slideInRight 0.4s; }
     
-    /* 다음 목적지 핀 점멸 애니메이션 */
+    /* 다음 목적지 핀 점멸 애니메이션 - Leaflet absolute positioning 변위 차단 및 내부 아이콘만 스케일 애니메이션 */
     @keyframes pinPulse {
       0% { transform: scale(1); filter: drop-shadow(0 0 0px var(--primary)); }
       50% { transform: scale(1.15); filter: drop-shadow(0 0 10px var(--primary)); }
       100% { transform: scale(1); filter: drop-shadow(0 0 0px var(--primary)); }
     }
-    .pin-pulse { animation: pinPulse 1.5s infinite ease-in-out; z-index: 1000 !important; }
+    .pin-pulse i { animation: pinPulse 1.5s infinite ease-in-out; }
+    .pin-pulse { z-index: 1000 !important; }
+
+    /* Circular blinking vehicle icon style */
+    .live-vehicle-marker {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: transparent !important;
+      border: none !important;
+    }
+    .live-vehicle-marker .car-marker-container {
+      position: relative;
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      background: white;
+      box-shadow: 0 0 8px rgba(0,0,0,0.3);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      border: 3px solid var(--vehicle-color, #6C5CE7);
+      transition: all 0.2s ease;
+    }
+    .live-vehicle-marker .car-marker-container i {
+      font-size: 16px;
+      color: var(--vehicle-color, #6C5CE7);
+    }
+    .live-vehicle-marker .car-marker-container::before {
+      content: '';
+      position: absolute;
+      top: -6px; left: -6px; right: -6px; bottom: -6px;
+      border-radius: 50%;
+      border: 3px solid var(--vehicle-color, #6C5CE7);
+      opacity: 0.8;
+      animation: vehiclePulse 1.8s infinite ease-out;
+      pointer-events: none;
+    }
+    @keyframes vehiclePulse {
+      0% { transform: scale(0.9); opacity: 0.9; }
+      100% { transform: scale(1.4); opacity: 0; }
+    }
   </style>
 </head>
 <body>
@@ -308,56 +349,26 @@
 
     <!-- 공지사항 관리 뷰 -->
     <section id="view-notice" class="view-section">
-      <div class="dashboard-grid" style="grid-template-columns: 450px 1fr;">
-        <!-- 공지사항 등록 폼 -->
-        <div class="card">
-          <div class="card-header">
-            <h4 class="card-title">기사 공지사항 등록</h4>
-          </div>
-          <div class="card-body">
-            <div class="form-group" style="margin-bottom: 15px;">
-              <label style="font-weight: 600; color: var(--text-main);">공지 대상 선택</label>
-              <select id="noticeTarget" class="form-control" style="margin-top: 5px;">
-                <option value="global">📢 전체 공지사항</option>
-                <option value="1">🚚 1호차 전용 공지</option>
-                <option value="2">🚚 2호차 전용 공지</option>
-                <option value="3">🚚 3호차 전용 공지</option>
-                <option value="4">🚚 4호차 전용 공지</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label style="font-size: 1rem; color: var(--primary); font-weight: 600;">공지 내용 (이미지 붙여넣기 가능)</label>
-              <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 10px;">Ctrl+V로 이미지를 붙여넣을 수 있습니다.</p>
-              <div id="noticeEditor" contenteditable="true" placeholder="공지사항 내용을 입력하세요..." style="min-height: 250px; max-height: 400px; overflow-y: auto;"></div>
-            </div>
-            <div style="margin-top: 15px; display: flex; flex-direction: column; gap: 8px;">
-              <button class="btn-primary" id="saveNoticeBtn" style="width: 100%; padding: 12px;"><i class="fa-solid fa-paper-plane"></i> 공지사항 저장 및 전송</button>
-              <button class="btn-primary" id="deleteNoticeBtn" style="width: 100%; background-color: var(--danger); padding: 10px; font-size: 0.9rem;"><i class="fa-solid fa-trash-can"></i> 선택된 공지 삭제</button>
-            </div>
-          </div>
+      <div class="card" style="height: 100%;">
+        <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+          <h4 class="card-title">현재 등록된 공지 목록</h4>
+          <button class="btn-primary" id="openNoticeModalBtn" style="padding: 6px 12px; font-size: 0.85rem;"><i class="fa-solid fa-plus"></i> 공지사항 등록 (메세지 전송)</button>
         </div>
-
-        <!-- 공지사항 목록 테이블 -->
-        <div class="card">
-          <div class="card-header">
-            <h4 class="card-title">현재 등록된 공지 목록</h4>
-          </div>
-          <div class="card-body" style="padding: 0;">
-            <div style="overflow-x: auto;">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th style="width: 120px;">공지대상</th>
-                    <th>공지내용 (미리보기)</th>
-                    <th style="width: 150px;">등록일시</th>
-                    <th style="width: 80px;">관리</th>
-                  </tr>
-                </thead>
-                <tbody id="noticeTableBody">
-                  <tr><td colspan="4" style="text-align:center; padding: 30px;">공지사항을 불러오는 중...</td></tr>
-                </tbody>
-              </table>
-            </div>
+        <div class="card-body" style="padding: 0;">
+          <div style="overflow-x: auto;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width: 120px;">공지대상</th>
+                  <th>공지내용 (미리보기)</th>
+                  <th style="width: 150px;">등록일시</th>
+                  <th style="width: 80px;">관리</th>
+                </tr>
+              </thead>
+              <tbody id="noticeTableBody">
+                <tr><td colspan="4" style="text-align:center; padding: 30px;">공지사항을 불러오는 중...</td></tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -484,6 +495,37 @@
       <div class="modal-footer">
         <button class="btn-primary" style="background:var(--text-muted);" id="cancelDriverModal">취소</button>
         <button class="btn-primary" id="saveDriverBtn">등록하기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 공지사항(메시지 전송) 등록 모달 -->
+  <div class="modal-overlay" id="noticeModal">
+    <div class="modal-container" style="width: 500px;">
+      <div class="modal-header">
+        <h3>기사 공지사항 등록 (메세지 전송)</h3>
+        <button class="modal-close" id="closeNoticeModal"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group" style="margin-bottom: 15px;">
+          <label style="font-weight: 600; color: var(--text-main);">공지 대상 선택</label>
+          <select id="noticeTarget" class="form-control" style="margin-top: 5px; width: 100%;">
+            <option value="global">📢 전체 공지사항</option>
+            <option value="1">🚚 1호차 전용 공지</option>
+            <option value="2">🚚 2호차 전용 공지</option>
+            <option value="3">🚚 3호차 전용 공지</option>
+            <option value="4">🚚 4호차 전용 공지</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label style="font-size: 1rem; color: var(--primary); font-weight: 600;">공지 내용 (이미지 붙여넣기 가능)</label>
+          <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 10px;">Ctrl+V로 이미지를 붙여넣을 수 있습니다.</p>
+          <div id="noticeEditor" contenteditable="true" placeholder="공지사항 내용을 입력하세요..." style="min-height: 200px; max-height: 300px; overflow-y: auto;"></div>
+        </div>
+      </div>
+      <div class="modal-footer" style="display:flex; flex-direction: column; gap: 8px;">
+        <button class="btn-primary" id="saveNoticeBtn" style="width: 100%; padding: 12px;"><i class="fa-solid fa-paper-plane"></i> 공지사항 저장 및 전송</button>
+        <button class="btn-primary" id="deleteNoticeBtn" style="width: 100%; background-color: var(--danger); padding: 10px; font-size: 0.9rem;"><i class="fa-solid fa-trash-can"></i> 선택된 공지 삭제</button>
       </div>
     </div>
   </div>

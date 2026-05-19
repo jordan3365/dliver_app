@@ -14,7 +14,40 @@ let liveCarMarkers = []; // 실시간 차량 위치 마커
 let selectedImagesBase64 = []; // 이미지 저장을 위한 배열
 let alertedArrivals = new Set(); // HQ 도착 알림이 뜬 코스 저장
 let prevNextDestIds = new Set(); // 이전 목적지 ID 저장
+let prevDoneDestIds = new Set(); // 이전 배송 완료 거래처 ID 저장용
 let currentDrivers = []; // 실시간 기사 위치 정보 저장용 추가
+
+// AI TTS 음성 안내 함수 (기사앱과 동일한 프리미엄 TTS 음색 매핑 적용)
+let sysVoices = [];
+if (window.speechSynthesis) {
+  window.speechSynthesis.onvoiceschanged = () => {
+    sysVoices = window.speechSynthesis.getVoices();
+  };
+  sysVoices = window.speechSynthesis.getVoices();
+}
+
+function speak(text) {
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.cancel(); 
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = 'ko-KR';
+  
+  if (sysVoices.length === 0) sysVoices = window.speechSynthesis.getVoices();
+  const preferredVoices = ['Google 한국의', 'Microsoft SunHi', 'Microsoft InJoon', 'Yuna', 'Sora'];
+  let selectedVoice = null;
+  
+  for (let pref of preferredVoices) {
+    selectedVoice = sysVoices.find(v => v.lang.includes('ko') && v.name.includes(pref));
+    if (selectedVoice) break;
+  }
+  if (!selectedVoice) selectedVoice = sysVoices.find(v => v.lang.includes('ko'));
+  
+  if (selectedVoice) utterance.voice = selectedVoice;
+  
+  utterance.rate = 1.0;
+  utterance.pitch = 1.0;
+  window.speechSynthesis.speak(utterance);
+}
 
 const HQ_COORD = { lat: 37.556898, lng: 127.206401 }; // 경기도 하남시 덕풍동 833-1 (현대지식산업센터 한강미사)
 
@@ -94,6 +127,40 @@ function getDist(lat1, lon1, lat2, lon2) {
             Math.sin(dLon/2) * Math.sin(dLon/2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   return R * c;
+}
+
+// 최단거리 Nearest Neighbor 정렬 헬퍼 (TSP 최적화)
+function sortNearest(points, start = HQ_COORD) {
+  let unvisited = [...points];
+  let sorted = [];
+  let current = start;
+  
+  while (unvisited.length > 0) {
+    let nearestIdx = -1;
+    let minDist = Infinity;
+    
+    for (let i = 0; i < unvisited.length; i++) {
+      const pLat = parseFloat(unvisited[i].latitude);
+      const pLng = parseFloat(unvisited[i].longitude);
+      const cLat = current.lat !== undefined ? current.lat : (current.latitude !== undefined ? current.latitude : HQ_COORD.lat);
+      const cLng = current.lng !== undefined ? current.lng : (current.longitude !== undefined ? current.longitude : HQ_COORD.lng);
+      
+      const dist = getDist(cLat, cLng, pLat, pLng);
+      if (dist < minDist) {
+        minDist = dist;
+        nearestIdx = i;
+      }
+    }
+    
+    if (nearestIdx !== -1) {
+      const nextPoint = unvisited.splice(nearestIdx, 1)[0];
+      sorted.push(nextPoint);
+      current = nextPoint;
+    } else {
+      break;
+    }
+  }
+  return sorted;
 }
 
 // AI 실시간 교통상황 (가상) 생성 함수 - 1분마다 상태 변동
@@ -230,6 +297,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     const noticeEditor = document.getElementById('noticeEditor');
     const noticeTarget = document.getElementById('noticeTarget');
 
+    // 공지사항 모달 제어
+    const openNoticeBtn = document.getElementById('openNoticeModalBtn');
+    if (openNoticeBtn) {
+      openNoticeBtn.addEventListener('click', () => {
+        // 공지 내용 초기화
+        noticeEditor.innerHTML = '';
+        document.getElementById('noticeModal').classList.add('active');
+      });
+    }
+    const closeNoticeBtn = document.getElementById('closeNoticeModal');
+    if (closeNoticeBtn) {
+      closeNoticeBtn.addEventListener('click', () => {
+        document.getElementById('noticeModal').classList.remove('active');
+      });
+    }
+
     // 이미지 붙여넣기 핸들러
     noticeEditor.addEventListener('paste', (e) => {
       const items = (e.clipboardData || e.originalEvent.clipboardData).items;
@@ -301,6 +384,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         await api.saveNotice(target, content, images);
         showAdminDialog('저장 완료', '공지사항이 성공적으로 저장 및 전송되었습니다.');
+        document.getElementById('noticeModal').classList.remove('active');
         renderNoticeView();
       } catch(e) {
         showAdminDialog('오류', '공지사항 저장에 실패했습니다.');
@@ -317,6 +401,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           await api.deleteNotice(target);
           noticeEditor.innerHTML = '';
           showAdminDialog('삭제 완료', '공지사항이 성공적으로 삭제되었습니다.');
+          document.getElementById('noticeModal').classList.remove('active');
           renderNoticeView();
         } catch(e) {
           showAdminDialog('오류', '공지 삭제에 실패했습니다.');
@@ -377,6 +462,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     await loadDashboardData();
+
+    // 관리자앱 변경사항 실시간 자동 업데이트 (5초 주기로 백그라운드 데이터 갱신)
+    setInterval(async () => {
+      try {
+        await loadDashboardData();
+      } catch (err) {
+        console.warn("실시간 데이터 자동 갱신 대기 중...", err);
+      }
+    }, 5000);
   } catch (err) {
     console.error("App initialization failed:", err);
     const errorMsg = `
@@ -413,6 +507,20 @@ async function loadDashboardData() {
     
     currentData = deliveryRes;
     currentDrivers = driverRes;
+
+    // 새롭게 완료된 배송처 감지하여 AI 음성 안내
+    if (Array.isArray(deliveryRes)) {
+      const currentDoneItems = deliveryRes.filter(d => d.status === 'done');
+      if (prevDoneDestIds.size > 0) {
+        currentDoneItems.forEach(item => {
+          if (!prevDoneDestIds.has(item.id)) {
+            const courseStr = item.course ? `${item.course}호차` : '배송차량';
+            speak(`${courseStr} 배송처 ${item.name} 배송 완료되었습니다.`);
+          }
+        });
+      }
+      prevDoneDestIds = new Set(currentDoneItems.map(d => d.id));
+    }
 
     renderDashboardList(currentData);
     await updateMapMarkers(currentData, currentDrivers);
@@ -545,8 +653,8 @@ async function updateMapMarkers(data, drivers = []) {
 
       let isExcluded = item.status === 'excluded';
       let baseColor = getCourseColor(item.course);
-      let pinColor = item.status === 'done' ? '#b2bec3' : (isExcluded ? '#dfe6e9' : baseColor); 
-      let orderText = item.status === 'done' ? '<i class="fa-solid fa-check" style="font-size:12px;"></i>' : (isExcluded ? '<i class="fa-solid fa-xmark" style="font-size:12px;"></i>' : (item.order ? item.order : '-'));
+      let pinColor = item.status === 'done' ? '#2ecc71' : (isExcluded ? '#dfe6e9' : baseColor); 
+      let orderText = item.status === 'done' ? '<span style="font-size: 8px; font-weight: 900; position: relative; top: -1px; letter-spacing: -0.5px; color: white !important;">완료</span>' : (isExcluded ? '<i class="fa-solid fa-xmark" style="font-size:12px;"></i>' : (item.order ? item.order : '-'));
       
       let classNames = 'map-pin';
       let isNextDest = nextDestIds.has(item.id);
@@ -554,7 +662,7 @@ async function updateMapMarkers(data, drivers = []) {
 
       const pinIcon = L.divIcon({
         className: classNames,
-        html: `<i class="fa-solid fa-location-dot" style="color: ${pinColor}; ${item.status === 'done' || isExcluded ? 'opacity:0.6;' : ''}"></i><span style="${isExcluded ? 'color:#636e72;' : ''}">${orderText}</span>`,
+        html: `<i class="fa-solid fa-location-dot" style="color: ${pinColor}; ${item.status === 'done' ? 'opacity:1.0;' : (isExcluded ? 'opacity:0.6;' : '')}"></i><span style="${item.status === 'done' ? 'color:white !important;' : (isExcluded ? 'color:#636e72;' : '')}">${orderText}</span>`,
         iconSize: [32, 42], iconAnchor: [16, 42], popupAnchor: [0, -42]
       });
 
@@ -614,54 +722,77 @@ async function updateMapMarkers(data, drivers = []) {
 
   roadPathsResults.forEach(({ course, items, roadPoints }) => {
     const color = getCourseColor(course);
-    // 진한 실선으로 표시
-    const poly = L.polyline(roadPoints, {color: color, weight: 6, opacity: 0.7}).addTo(map);
+    // 진한 실선으로 표시 (흐르는 듯한 마칭 앤츠 애니메이션 가미)
+    const poly = L.polyline(roadPoints, {color: color, weight: 6, opacity: 0.8, className: 'animated-route-line'}).addTo(map);
     livePolylines.push(poly);
 
-    // 차량 위치 결정 (실시간 GPS 우선, 없으면 마지막 완료 지점)
+    // 차량 위치 결정 (운행 중일 때만 실시간 GPS 혹은 추정 완료 위치 적용, 미운행/완료 시 HQ 및 LIVE 배지 비활성화)
     const driverInfo = drivers.find(d => String(d.course) === String(course));
     let carPos = [HQ_COORD.lat, HQ_COORD.lng];
     let isLiveGps = false;
 
-    if (driverInfo && driverInfo.currentLocation) {
-      // 실시간 GPS 사용
-      carPos = [driverInfo.currentLocation.lat, driverInfo.currentLocation.lng];
-      isLiveGps = true;
-    } else {
-      // 위치 추정 (마지막 완료 지점)
-      const doneItems = items.filter(it => it.status === 'done');
-      if(doneItems.length > 0) {
-        const lastDone = doneItems[doneItems.length - 1];
-        carPos = [lastDone.latitude, lastDone.longitude];
-      }
-    }
-
     const isActive = items.some(it => it.status === 'delivering' || it.status === 'done');
     const isAllDone = items.length > 0 && items.every(it => it.status === 'done');
 
-    if(isActive && !isAllDone) {
-      const carIcon = L.divIcon({
-        className: 'live-car',
-        html: `
-          <div class="car-marker-container">
-            <i class="fa-solid fa-truck" style="color:white; background:${color}; padding:6px; border-radius:50%; font-size:16px; border:2px solid white; box-shadow:0 0 15px ${color};"></i>
-            ${isLiveGps ? '<span class="live-badge">LIVE</span>' : ''}
-          </div>
-        `,
-        iconSize: [32, 32], iconAnchor: [16, 16]
-      });
-      const carMarker = L.marker(carPos, {icon: carIcon, zIndexOffset: 500}).addTo(map);
-      liveCarMarkers.push(carMarker);
+    if (isActive && !isAllDone) {
+      // 배송 운행 중일 때만 실시간 위치 정보 표시
+      if (driverInfo && driverInfo.currentLocation) {
+        carPos = [driverInfo.currentLocation.lat, driverInfo.currentLocation.lng];
+        isLiveGps = true;
+      } else {
+        // GPS 정보가 없을 때만 마지막 완료 지점을 추정 위치로 사용
+        const doneItems = items.filter(it => it.status === 'done');
+        if(doneItems.length > 0) {
+          const lastDone = doneItems[doneItems.length - 1];
+          carPos = [lastDone.latitude, lastDone.longitude];
+        }
+      }
+    } else {
+      // 운행 전이거나 복귀 완료 상태이면 항상 HQ에 위치시키고 LIVE 배지를 원천 비활성화
+      carPos = [HQ_COORD.lat, HQ_COORD.lng];
+      isLiveGps = false;
+    }
 
-      // 근접 알림 체크 (다음 목적지 100m 이내 접근 시 팝업 자동 오픈)
-      const nextDest = items.find(it => it.status !== 'done');
-      if (nextDest) {
-        const dist = getDist(carPos[0], carPos[1], nextDest.latitude, nextDest.longitude);
-        if (dist <= 0.1) { // 100m 이내
-          const marker = markers.find(m => m.options.title === String(nextDest.id));
-          if (marker && !marker.isPopupOpen()) {
-            marker.openPopup();
-          }
+    // 시뮬레이션 중인 코스는 실제/추정 마커를 맵에 중복 표시하지 않음 (1호차 시뮬레이션 LIVE 오류 해결)
+    if (simIntervals[course]) {
+      return;
+    }
+
+    // 기사별 차량 아이콘 항상 노출 (HQ 상주 또는 주행 중)
+    const carIcon = L.divIcon({
+      className: 'live-vehicle-marker',
+      html: `
+        <div class="car-marker-container" style="--vehicle-color: ${color}; border-color: ${color};">
+          <i class="fa-solid fa-truck" style="color: ${color};"></i>
+          ${isLiveGps ? '<span class="live-badge" style="top: -12px; right: -12px; background: #2ecc71; color: white; padding: 2px 5px; font-size: 9px; font-weight: bold; border-radius: 4px; position: absolute; box-shadow: 0 0 5px rgba(0,0,0,0.2);">LIVE</span>' : ''}
+        </div>
+      `,
+      iconSize: [38, 38], iconAnchor: [19, 19]
+    });
+    const carMarker = L.marker(carPos, {icon: carIcon, zIndexOffset: 500}).addTo(map);
+
+    let carStatusLabel = '운행 전 (대기)';
+    if (isActive && !isAllDone) carStatusLabel = '배송 운행 중';
+    else if (isAllDone) carStatusLabel = '운행 완료 (HQ 복귀)';
+
+    carMarker.bindPopup(`
+      <div style="text-align:center;">
+        <h4 style="margin:0 0 5px 0; color:${color};">${course}호차</h4>
+        <span class="badge" style="background:${color}; color:white; font-size:0.75rem; padding:2px 6px; border-radius:4px;">${carStatusLabel}</span><br>
+        <small style="display:block; margin-top:5px;">${isLiveGps ? '실시간 GPS 연동 중' : '본사(HQ) 대기 상태'}</small>
+      </div>
+    `);
+
+    liveCarMarkers.push(carMarker);
+
+    // 근접 알림 체크 (다음 목적지 100m 이내 접근 시 팝업 자동 오픈)
+    const nextDest = items.find(it => it.status !== 'done');
+    if (nextDest) {
+      const dist = getDist(carPos[0], carPos[1], nextDest.latitude, nextDest.longitude);
+      if (dist <= 0.1) { // 100m 이내
+        const marker = markers.find(m => m.options.title === String(nextDest.id));
+        if (marker && !marker.isPopupOpen()) {
+          marker.openPopup();
         }
       }
     }
@@ -830,14 +961,24 @@ async function autoResetSystem() {
   }
 }
 
-window.adminSendMessage = async function(course, driverName) {
-  const msg = prompt(`[${course}호차 ${driverName} 기사님]에게 보낼 메시지를 입력하세요.`);
-  if (!msg) return;
-  try {
-    await api.saveNotice(course, `<strong>[관리자 지시사항]</strong><br>${msg}`, []);
-    showToast(`${course}호차로 메시지를 전송했습니다.`);
-  } catch(e) {
-    alert('메시지 전송 실패');
+window.adminSendMessage = function(course, driverName) {
+  const targetSelect = document.getElementById('noticeTarget');
+  const editor = document.getElementById('noticeEditor');
+  
+  if (targetSelect) {
+    targetSelect.value = String(course);
+  }
+  
+  if (editor) {
+    editor.innerHTML = `<strong>[관리자 지시사항]</strong><br>`;
+  }
+  
+  const noticeModal = document.getElementById('noticeModal');
+  if (noticeModal) {
+    noticeModal.classList.add('active');
+    setTimeout(() => {
+      if (editor) editor.focus();
+    }, 100);
   }
 };
 
@@ -1026,6 +1167,7 @@ window.loadNoticeToEditor = function(target) {
     if (Array.isArray(notices) && editor) {
       const current = notices.find(n => String(n.target) === String(target));
       editor.innerHTML = current ? current.content : '';
+      document.getElementById('noticeModal').classList.add('active');
       editor.focus();
     }
   }).catch(err => console.error("loadNoticeToEditor 에러:", err));
@@ -1231,8 +1373,8 @@ async function runSimulation() {
           accumulatedSecs += 600; // 배송지 체류 시간 (10분)
         });
         
-        // 경로 표시
-        const poly = L.polyline(routeCoords, {color: courseColor, weight: 5, opacity: 0.6}).addTo(map);
+        // 경로 표시 (마칭 앤츠 효과 가미)
+        const poly = L.polyline(routeCoords, {color: courseColor, weight: 5, opacity: 0.8, className: 'animated-route-line'}).addTo(map);
         routePolylines[course] = poly;
 
         if (simType === 'ai_traffic') {
@@ -1243,7 +1385,7 @@ async function runSimulation() {
             let rand = Math.random();
             let color = courseColor;
             if (rand > 0.8) color = '#d63031';
-            let p = L.polyline(chunk, {color: color, weight: 8, opacity: 0.4}).addTo(map);
+            let p = L.polyline(chunk, {color: color, weight: 8, opacity: 0.4, className: 'animated-route-line'}).addTo(map);
             window.trafficPolylines.push(p);
           }
         }
@@ -1254,9 +1396,13 @@ async function runSimulation() {
 
         // 차량 아이콘
         const carIcon = L.divIcon({
-          className: 'car-icon',
-          html: `<i class="fa-solid fa-truck-fast" style="color:white; font-size:18px; background:${courseColor}; padding:6px; border-radius:50%; border:2px solid white; box-shadow:0 0 10px rgba(0,0,0,0.3);"></i>`,
-          iconSize: [32, 32], iconAnchor: [16, 16]
+          className: 'live-vehicle-marker',
+          html: `
+            <div class="car-marker-container" style="--vehicle-color: ${courseColor}; border-color: ${courseColor};">
+              <i class="fa-solid fa-truck" style="color: ${courseColor};"></i>
+            </div>
+          `,
+          iconSize: [38, 38], iconAnchor: [19, 19]
         });
         const marker = L.marker(routeCoords[0], {icon: carIcon, zIndexOffset: 1000}).addTo(map);
         carMarkers[course] = marker;
@@ -1266,6 +1412,8 @@ async function runSimulation() {
         simIntervals[course] = setInterval(() => {
           if (i >= routeCoords.length) {
             clearInterval(simIntervals[course]);
+            delete simIntervals[course];
+            loadDashboardData();
             return;
           }
           marker.setLatLng(routeCoords[i]);

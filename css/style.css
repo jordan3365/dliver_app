@@ -20,6 +20,18 @@
   --font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', sans-serif;
 }
 
+/* Dark Mode Tokens */
+body.dark-mode {
+  --bg-color: #0F0F1A;
+  --surface: rgba(26, 26, 46, 0.75);
+  --surface-solid: #1A1A2E;
+  --text-main: #E2E8F0;
+  --text-muted: #94A3B8;
+  --border-color: rgba(255, 255, 255, 0.08);
+  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -31,6 +43,7 @@ body {
   background-color: var(--bg-color);
   color: var(--text-main);
   -webkit-font-smoothing: antialiased;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -53,9 +66,14 @@ a:hover {
   background: var(--surface);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   box-shadow: var(--shadow-md);
   border-radius: var(--radius);
+  transition: background 0.3s ease, border-color 0.3s ease;
+}
+
+body.dark-mode .glass-panel {
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .btn-primary {
@@ -85,8 +103,13 @@ a:hover {
   border-radius: 8px;
   font-family: inherit;
   font-size: 1rem;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.3s ease;
   background-color: #FAFBFC;
+  color: var(--text-main);
+}
+
+body.dark-mode .form-control {
+  background-color: #26263F;
 }
 
 .form-control:focus {
@@ -94,6 +117,21 @@ a:hover {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.1);
   background-color: white;
+}
+
+body.dark-mode .form-control:focus {
+  background-color: #1A1A2E;
+}
+
+/* Marching Ants animated routes */
+.animated-route-line {
+  stroke-dasharray: 12, 12;
+  animation: routeMarch 35s linear infinite;
+}
+
+@keyframes routeMarch {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -1000; }
 }
 
 /* Animations */
@@ -104,4 +142,29 @@ a:hover {
 
 .animate-fade-in {
   animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Dark Mode Leaflet Fix */
+body.dark-mode .leaflet-container {
+  background: #111 !important;
+}
+
+body.dark-mode .leaflet-tile {
+  filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) !important;
+}
+
+body.dark-mode .custom-modal,
+body.dark-mode .arrival-card,
+body.dark-mode .delivery-card {
+  background-color: var(--surface-solid) !important;
+  color: var(--text-main);
+  border-color: var(--border-color) !important;
+}
+
+body.dark-mode .bottom-nav,
+body.dark-mode .topbar,
+body.dark-mode .sidebar {
+  background-color: var(--surface-solid) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-main);
 }
