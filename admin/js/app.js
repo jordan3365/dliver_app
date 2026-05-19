@@ -420,6 +420,9 @@ document.addEventListener('DOMContentLoaded', async () => {
           api.sendAdminNotification('배송 상태가 전체 초기화되었습니다.');
           alertedArrivals.clear();
           await loadDashboardData();
+          if (map) {
+            map.setView([HQ_COORD.lat, HQ_COORD.lng], 13);
+          }
           showAdminDialog('초기화 완료', '모든 배송 데이터가 "대기중" 상태로 초기화되었습니다.');
         } catch(e) {
           showAdminDialog('오류', '초기화 실패');
@@ -647,7 +650,21 @@ async function updateMapMarkers(data, drivers = []) {
   const newlyAddedDestIds = [...nextDestIds].filter(id => !prevNextDestIds.has(id));
 
     data.forEach(item => {
-    if (item.latitude && item.longitude && item.course) {
+    // 코스가 정의되어 있는 배송처는 누락된 위경도 좌표가 있더라도 살려내서 매핑합니다.
+    if (item.course) {
+      let lat = parseFloat(item.latitude);
+      let lng = parseFloat(item.longitude);
+      
+      // 위경도가 올바르지 않거나 (NaN, 0.0 등), 대한민국 좌표 범위를 완전히 이탈한 경우 본사 주변 임시 좌표로 구제
+      if (isNaN(lat) || isNaN(lng) || lat < 30 || lat > 45 || lng < 120 || lng > 135) {
+        console.warn(`[좌표 보정] 배송처 ID: ${item.id} (${item.name})의 위경도 데이터가 비정상(Lat:${item.latitude}, Lng:${item.longitude})이어 본사 인근 임시 좌표로 보정합니다.`);
+        lat = HQ_COORD.lat + (Math.random() - 0.5) * 0.006;
+        lng = HQ_COORD.lng + (Math.random() - 0.5) * 0.006;
+        // 데이터 객체에도 보정값 반영
+        item.latitude = lat;
+        item.longitude = lng;
+      }
+
       if(!coursePaths[item.course]) coursePaths[item.course] = [];
       coursePaths[item.course].push(item);
 
@@ -667,10 +684,6 @@ async function updateMapMarkers(data, drivers = []) {
       });
 
       try {
-        let lat = parseFloat(item.latitude);
-        let lng = parseFloat(item.longitude);
-        if (isNaN(lat) || isNaN(lng)) throw new Error("Invalid coordinates");
-
         const marker = L.marker([lat, lng], {icon: pinIcon, title: String(item.id)}).addTo(map);
         
         let statusBadgeClass = item.status === 'done' ? 'badge-done' : (isExcluded ? 'badge-pending' : 'badge-pending');
@@ -1178,11 +1191,11 @@ async function renderRoutingView() {
   const tbody = document.getElementById('routingTableBody');
   tbody.innerHTML = '';
   document.getElementById('selectAllRoutes').checked = false;
-  const unassigned = currentData.filter(d => d.course === null || d.course === "");
+  const unassigned = currentData.filter(d => !d.course || d.course === "" || String(d.course) === "null" || String(d.course) === "undefined");
 
-  // Update Driver Select
+  // Update Driver Select (이미 로드된 currentDrivers 전역 캐시 활용)
   const driverSelect = document.getElementById('manualDriverSelect');
-  const drivers = await api.getDrivers();
+  const drivers = currentDrivers && currentDrivers.length > 0 ? currentDrivers : await api.getDrivers();
   driverSelect.innerHTML = '<option value="">코스(기사) 선택</option>';
   drivers.forEach(dr => {
     driverSelect.innerHTML += `<option value="${dr.course}">${dr.course}코스 (${dr.name})</option>`;
@@ -1279,24 +1292,41 @@ async function executeManualRouting() {
   if (!selectedCourse) { alert('수동 할당할 코스(기사)를 선택해주세요.'); return; }
 
   const routeUpdates = [];
-  // 현재 코스의 마지막 순번 찾기
+  // 현재 코스의 마지막 순번 찾기 (안전한 정수 파싱 및 NaN 방지 로직 적용)
   let maxOrder = 0;
-  const courseItems = currentData.filter(d => String(d.course) === String(selectedCourse));
-  if(courseItems.length > 0) maxOrder = Math.max(...courseItems.map(d => d.order || 0));
+  const courseItems = currentData.filter(d => d.course && String(d.course) === String(selectedCourse));
+  if (courseItems.length > 0) {
+    const validOrders = courseItems.map(d => parseInt(d.order) || 0).filter(o => !isNaN(o));
+    if (validOrders.length > 0) {
+      maxOrder = Math.max(...validOrders);
+    }
+  }
 
   checkboxes.forEach(cb => {
     const id = parseInt(cb.dataset.id);
-    maxOrder++;
-    routeUpdates.push({ id: id, course: String(selectedCourse), order: maxOrder });
+    if (!isNaN(id)) {
+      maxOrder++;
+      routeUpdates.push({ id: id, course: String(selectedCourse), order: maxOrder });
+    }
   });
+
+  if (routeUpdates.length === 0) {
+    alert('선택된 배송처의 ID 정보가 올바르지 않습니다.');
+    return;
+  }
 
   try {
     const res = await api.assignRoutes(routeUpdates);
     if(res.success) {
       alert('수동 할당이 완료되었습니다.');
       await loadDashboardData();
+    } else {
+      throw new Error(res.error || '서버 처리 실패');
     }
-  } catch(e) { alert('할당 중 오류 발생'); }
+  } catch(e) { 
+    console.error('수동 할당 실패 상세 로그:', e);
+    alert(`할당 중 오류 발생: ${e.message}`); 
+  }
 }
 
 // OSMR API Route Simulation - 다중 차량 동시 시뮬레이션 지원
@@ -1691,7 +1721,7 @@ async function saveClient() {
 async function renderDriversView() {
   const tbody = document.getElementById('driversTableBody');
   tbody.innerHTML = '';
-  const drivers = await api.getDrivers();
+  const drivers = currentDrivers && currentDrivers.length > 0 ? currentDrivers : await api.getDrivers();
   if(drivers.length === 0) return;
 
   drivers.forEach(dr => {

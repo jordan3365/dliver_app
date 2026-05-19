@@ -258,7 +258,8 @@ function updateCourseStatus(payload) {
 }
 
 function resetAllDeliveryStatus() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('배송목록');
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('배송목록');
   const data = sheet.getDataRange().getValues();
   let count = 0;
   
@@ -268,6 +269,13 @@ function resetAllDeliveryStatus() {
       count++;
     }
   }
+
+  // 실시간 기사 위치 테이블도 헤더를 제외하고 깨끗하게 비워주어 지도 관제 리셋
+  const locSheet = ss.getSheetByName('실시간위치');
+  if (locSheet && locSheet.getLastRow() > 1) {
+    locSheet.deleteRows(2, locSheet.getLastRow() - 1);
+  }
+
   return { success: true, count: count };
 }
 

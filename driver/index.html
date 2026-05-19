@@ -505,9 +505,18 @@
     }
 
     document.addEventListener('DOMContentLoaded', async () => {
-      // 초기 GPS 권한 요청 (사전 동의)
+      // 초기 GPS 권한 요청 및 위치 서비스 활용 동의
       if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(() => {}, () => {}, {timeout: 5000});
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            console.log("GPS 최초 획득 성공:", pos.coords.latitude, pos.coords.longitude);
+          },
+          (err) => {
+            console.warn("GPS 최초 획득 실패:", err);
+            showDialog('위치 수집 동의 안내', '배송 관제 및 길안내를 위해 스마트폰의 GPS 위치 활용 동의가 반드시 필요합니다. 브라우저 주소창 왼쪽의 자물쇠/설정 아이콘을 눌러 위치 권한을 허용해 주시고 기기의 GPS 위치 서비스를 켜주십시오.');
+          },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
       }
       
       let userStr = localStorage.getItem('authUser');
@@ -683,8 +692,11 @@
           const lat = pos.coords.latitude;
           const lng = pos.coords.longitude;
           const now = Date.now();
+          const timeDiff = now - lastUpdateData.time;
+          const distDiff = getDist(lat, lng, lastUpdateData.lat, lastUpdateData.lng);
 
-          if (now - lastUpdateData.time > 5000 || getDist(lat, lng, lastUpdateData.lat, lastUpdateData.lng) > 0.01) {
+          // 10m 이상 실질적으로 이동했거나, 대기 중이더라도 60초 생존 주기 보고 시에만 서버 업데이트
+          if (lastUpdateData.time === 0 || (timeDiff > 5000 && distDiff > 0.01) || timeDiff > 60000) {
             try {
               await api.updateDriverLocation(currentUserCourse, lat, lng);
               lastUpdateData = { lat, lng, time: now };
@@ -718,11 +730,9 @@
         },
         (err) => {
           console.error('GPS 에러:', err);
-          if (err.code === 1) { 
-            showDialog('GPS 권한 필요', '기사님의 실시간 위치를 관리자에게 공유하려면 GPS 권한이 반드시 필요합니다. 브라우저 설정에서 위치 권한을 허용해주세요.');
-          }
+          showDialog('GPS 수신 불가', '스마트폰의 실시간 배송 관제를 위해 기기의 위치(GPS) 정보 활성화 및 브라우저 권한 허용이 무조건 요구됩니다. 설정 상태를 확인해 주세요.');
         },
-        { enableHighAccuracy: true, maximumAge: 10000 }
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
       );
     }
 
