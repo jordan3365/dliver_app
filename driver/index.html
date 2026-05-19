@@ -22,7 +22,24 @@
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
   <style>
-    /* Native App Viewport & Scroll Protection */
+    /* Premium Coupang Flex Native UI Theme */
+    :root {
+      --primary: #0054A6; /* Coupang Blue */
+      --secondary: #002D5A; 
+      --success: #2ecc71;
+      --warning: #f1c40f;
+      --danger: #e74c3c;
+      --bg-main: #eff2f6;
+      --card-bg: #ffffff;
+      --text-main: #1d2129;
+      --text-muted: #8a96a3;
+      --border-color: #e5e9f0;
+      --radius: 16px;
+      --shadow-sm: 0 4px 10px rgba(0, 84, 166, 0.04);
+      --shadow-md: 0 8px 24px rgba(0, 84, 166, 0.08);
+      --shadow-lg: 0 16px 36px rgba(0, 84, 166, 0.12);
+    }
+
     html, body {
       width: 100%;
       height: 100%;
@@ -32,216 +49,251 @@
       position: fixed !important;
       overscroll-behavior: none !important;
       -webkit-user-select: none;
-      -moz-user-select: none;
-      -ms-user-select: none;
       user-select: none;
-      -webkit-touch-callout: none !important;
       -webkit-tap-highlight-color: transparent !important;
       outline: none !important;
       font-family: -apple-system, BlinkMacSystemFont, "Pretendard", "Segoe UI", Roboto, sans-serif;
-      background-color: #f4f6f9;
+      background-color: var(--bg-main);
+      color: var(--text-main);
       display: flex;
       flex-direction: column;
     }
     
     body.dark-mode {
-      background-color: #121212 !important;
-      color: #f5f6fa !important;
+      --bg-main: #0b0f19;
+      --card-bg: #141c2f;
+      --text-main: #f5f6fa;
+      --text-muted: #7f8fa6;
+      --border-color: #243049;
+      --shadow-sm: 0 4px 10px rgba(0,0,0,0.3);
+      --shadow-md: 0 8px 24px rgba(0,0,0,0.4);
     }
 
-    /* Enable text select on input fields only */
     input, textarea, select {
       -webkit-user-select: text !important;
       user-select: text !important;
-      outline: none !important;
     }
 
     /* Apple Safe Area notched screen adaptation */
     .mobile-header {
-      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      background: linear-gradient(135deg, var(--secondary), var(--primary));
       color: white;
       padding: calc(20px + env(safe-area-inset-top)) 20px 20px 20px;
       box-shadow: var(--shadow-md);
       z-index: 1000;
       flex-shrink: 0;
-    }
-    .header-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-    .header-title { font-size: 1.2rem; font-weight: 700; }
-    .progress-container { background: rgba(255,255,255,0.2); border-radius: 10px; height: 8px; overflow: hidden; margin-top: 10px; }
-    .progress-bar { height: 100%; background: white; width: 0%; transition: width 0.5s ease; }
-    
-    /* Top Map for Driver */
-    #driverMap {
-      width: 100%;
-      height: 200px;
-      background: #ddd;
       border-bottom-left-radius: 20px;
       border-bottom-right-radius: 20px;
-      box-shadow: var(--shadow-sm);
+    }
+    .header-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .header-title { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.5px; display: flex; align-items: center; gap: 8px; }
+    
+    /* Coupang Flex Style Status Dashboard Grid */
+    .flex-dashboard {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 15px;
+      background: rgba(255,255,255,0.08);
+      padding: 10px;
+      border-radius: 12px;
+      backdrop-filter: blur(5px);
+    }
+    .dashboard-item {
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    .dashboard-val { font-size: 1.25rem; font-weight: 900; }
+    .dashboard-lbl { font-size: 0.7rem; opacity: 0.8; margin-top: 3px; font-weight: 600; }
+    
+    .progress-container { background: rgba(255,255,255,0.15); border-radius: 10px; height: 6px; overflow: hidden; margin-top: 15px; }
+    .progress-bar { height: 100%; background: #00e676; width: 0%; transition: width 0.5s ease; }
+    
+    /* Leaflet Map */
+    #driverMap {
+      width: 100%;
+      height: 220px; /* List view height */
+      background: #ddd;
       z-index: 1;
       flex-shrink: 0;
+      transition: height 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    #driverMap.full-map {
+      height: calc(100% - calc(58px + env(safe-area-inset-bottom)) - calc(70px + env(safe-area-inset-top))) !important;
+      flex: 1;
     }
 
-    /* Scroll Momentum with Native WebKit & hidden scrollbars */
+    /* Scroll Container with hidden scrollbars */
     .list-container {
       flex: 1;
       overflow-y: auto !important;
       -webkit-overflow-scrolling: touch !important;
       padding: 15px;
       padding-bottom: calc(85px + env(safe-area-inset-bottom)) !important; /* Bottom nav buffer */
-      scrollbar-width: none !important; /* Firefox */
-      -ms-overflow-style: none !important; /* IE */
+      scrollbar-width: none !important;
     }
     .list-container::-webkit-scrollbar {
       display: none !important;
-      width: 0 !important;
-      height: 0 !important;
     }
 
-    /* Delivery Card with elegant press responses */
+    /* Coupang Flex Delivery Card */
     .delivery-card {
-      background: white;
+      background: var(--card-bg);
       border-radius: var(--radius);
-      padding: 16px;
+      padding: 18px;
       margin-bottom: 15px;
       box-shadow: var(--shadow-sm);
-      border-left: 4px solid var(--warning);
+      border-left: 5px solid var(--primary);
       position: relative;
       transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease !important;
     }
-    .delivery-card.done { border-left-color: var(--success); opacity: 0.6; }
+    .delivery-card.done { border-left-color: var(--success); opacity: 0.75; }
     .delivery-card.delivering { border-left-color: var(--primary); }
-    .delivery-card.excluded { border-left-color: #dfe6e9; background-color: #f5f6fa; }
-    .delivery-card.active-route { border-left-width: 6px; transform: scale(1.01); }
-    .delivery-card:active {
-      transform: scale(0.985) !important;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important;
-    }
-    body.dark-mode .delivery-card {
-      background: #1e1e1e !important;
-      color: #f5f6fa !important;
-      border-color: #2d2d2d;
+    .delivery-card.excluded { border-left-color: var(--border-color); opacity: 0.5; }
+    .delivery-card.active-route {
+      border-left-width: 7px;
+      box-shadow: var(--shadow-md);
+      transform: scale(1.01);
     }
     
-    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-    .place-name { font-weight: 700; font-size: 1.1rem; }
+    .card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; gap: 10px; }
+    .place-name { font-weight: 800; font-size: 1.15rem; letter-spacing: -0.3px; line-height: 1.3; }
+    .status-badge {
+      font-size: 0.75rem;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .card-body-info {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-bottom: 15px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .info-row { display: flex; align-items: center; gap: 6px; }
+    .info-row i { width: 14px; text-align: center; color: var(--primary); }
     
-    .btn-group { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 10px;}
-    .btn-action { padding: 10px 4px; border-radius: 8px; border: none; font-weight: 600; font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; transition: transform 0.1s ease; }
-    .btn-action:disabled { background: #eee !important; color: #bbb !important; cursor: not-allowed; }
-    .btn-detail { background: #eee; color: #333; }
-    .btn-navi { background: #FEE500; color: #000; }
-    .btn-complete { background: var(--success); color: white; }
-    .btn-complete:disabled { background: #ccc; }
+    /* Flex Action Buttons Grid */
+    .btn-group { display: grid; grid-template-columns: 1fr 1.2fr 1.5fr; gap: 8px; margin-top: 10px;}
+    .btn-action {
+      padding: 12px 6px;
+      border-radius: 10px;
+      border: none;
+      font-weight: 800;
+      font-size: 0.85rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+      transition: transform 0.1s ease;
+    }
+    .btn-action:disabled { background: var(--border-color) !important; color: var(--text-muted) !important; cursor: not-allowed; box-shadow: none; }
+    .btn-detail { background: #f0f3f8; color: #4a5568; }
+    .btn-navi { background: #FEE500; color: #1e1e1e; }
+    .btn-complete { background: var(--primary); color: white; }
+    
+    body.dark-mode .btn-detail { background: #243049; color: #e2e8f0; }
 
     /* Custom Map Pin */
     .map-pin { position: relative; width: 30px; height: 40px; background: transparent !important; border: none !important; }
-    .map-pin i { font-size: 30px; text-shadow: 1px 1px 2px rgba(0,0,0,0.5); }
-    .map-pin span { position: absolute; top: 5px; left: 50%; transform: translateX(-50%); color: white; font-weight: bold; font-size: 12px; font-family: sans-serif; }
+    .map-pin i { font-size: 32px; text-shadow: 1px 1px 3px rgba(0,0,0,0.4); }
+    .map-pin span { position: absolute; top: 6px; left: 50%; transform: translateX(-50%); color: white; font-weight: 900; font-size: 11px; }
 
-    /* Top Action Bar & Native Feedbacks */
+    /* Top Action Bar (배송출발) */
     .top-actions {
-      background: white;
+      background: var(--card-bg);
       padding: 12px 15px;
       display: flex;
       gap: 10px;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+      box-shadow: var(--shadow-sm);
       z-index: 2;
       flex-shrink: 0;
     }
-    body.dark-mode .top-actions {
-      background: #1e1e1e !important;
-      border-bottom: 1px solid #2d2d2d;
-    }
     .btn-top {
       flex: 1;
-      padding: 10px;
-      border-radius: 8px;
-      font-weight: 600;
-      font-size: 0.9rem;
+      padding: 14px;
+      border-radius: 12px;
+      font-weight: 800;
+      font-size: 1rem;
       cursor: pointer;
       border: none;
-      transition: transform 0.1s ease;
+      box-shadow: 0 4px 12px rgba(0, 84, 166, 0.2);
     }
-    .btn-refresh { background: #f0f0f0; color: #333; }
-    .btn-ack { background: var(--secondary); color: white; }
     .btn-start { background: var(--primary); color: white; }
 
-    /* Native Bottom Navigation notched screen padding */
+    /* Glassmorphism Bottom Navigation */
     .bottom-nav {
       position: fixed;
       bottom: 0;
       left: 0;
       right: 0;
-      background: white;
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: blur(15px);
+      -webkit-backdrop-filter: blur(15px);
       display: flex;
       justify-content: space-around;
-      padding: 12px 0 calc(12px + env(safe-area-inset-bottom)) 0;
-      box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
+      padding: 10px 0 calc(10px + env(safe-area-inset-bottom)) 0;
+      box-shadow: 0 -4px 20px rgba(0,0,0,0.06);
       z-index: 1000;
       flex-shrink: 0;
+      border-top: 1px solid rgba(255,255,255,0.4);
     }
     body.dark-mode .bottom-nav {
-      background: #1e1e1e !important;
-      border-top: 1px solid #2d2d2d;
+      background: rgba(20, 28, 47, 0.85) !important;
+      border-top: 1px solid rgba(255,255,255,0.05);
     }
-    .nav-btn { display: flex; flex-direction: column; align-items: center; color: var(--text-muted); font-size: 0.75rem; gap: 4px; background: none; border: none; cursor: pointer; transition: transform 0.1s ease; }
+    .nav-btn { display: flex; flex-direction: column; align-items: center; color: var(--text-muted); font-size: 0.75rem; gap: 4px; background: none; border: none; cursor: pointer; font-weight: 700; transition: color 0.2s; }
     .nav-btn.active { color: var(--primary); }
+    .nav-btn i { font-size: 1.25rem; margin-bottom: 2px; }
 
-    /* Button and Active State Physical response scaling */
+    /* Scaling interactions */
     .btn-action:active,
     .btn-top:active,
     .nav-btn:active,
     .btn-modal:active {
       transform: scale(0.95) !important;
-      opacity: 0.85 !important;
+      opacity: 0.9 !important;
     }
 
-    /* Custom Modal Popup */
-    .custom-modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); z-index: 2000; justify-content: center; align-items: center; padding: 20px;}
+    /* Modal Overlay styling */
+    .custom-modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(11, 15, 25, 0.6); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); z-index: 2000; justify-content: center; align-items: center; padding: 20px;}
     .custom-modal-overlay.active { display: flex; }
-    .custom-modal { background: white; width: 100%; max-width: 400px; border-radius: var(--radius); box-shadow: var(--shadow-md); animation: fadeIn 0.2s; overflow: hidden; display: flex; flex-direction: column; max-height: 90vh;}
-    .custom-modal-header { padding: 15px 20px; border-bottom: 1px solid var(--border-color); font-weight: bold; font-size: 1.1rem; background: var(--primary); color: white;}
-    .custom-modal-body { padding: 20px; font-size: 0.95rem; line-height: 1.5; overflow-y: auto; }
-    .custom-modal-footer { padding: 15px 20px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 10px; background: #fafbfc; }
-    .btn-modal { padding: 8px 16px; border-radius: 6px; border: none; font-weight: 600; cursor: pointer; transition: transform 0.1s ease; }
-    .btn-modal-cancel { background: #eee; color: #333; }
+    .custom-modal { background: var(--card-bg); width: 100%; max-width: 400px; border-radius: var(--radius); box-shadow: var(--shadow-lg); animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); overflow: hidden; display: flex; flex-direction: column; max-height: 85vh;}
+    
+    @keyframes slideUp {
+      from { transform: translateY(50px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    
+    .custom-modal-header { padding: 18px 20px; border-bottom: 1px solid var(--border-color); font-weight: 800; font-size: 1.15rem; background: var(--secondary); color: white;}
+    .custom-modal-body { padding: 22px; font-size: 0.95rem; line-height: 1.6; overflow-y: auto; color: var(--text-main); }
+    .custom-modal-footer { padding: 15px 20px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 10px; background: rgba(0,0,0,0.02); }
+    
+    .btn-modal { padding: 12px 20px; border-radius: 10px; border: none; font-weight: 800; cursor: pointer; font-size: 0.9rem; }
+    .btn-modal-cancel { background: #f0f3f8; color: #4a5568; }
     .btn-modal-confirm { background: var(--primary); color: white; }
+    body.dark-mode .btn-modal-cancel { background: #243049; color: #e2e8f0; }
 
-    /* Detail Modal Images */
-    .detail-images { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
-    .detail-images img { width: 100%; height: 120px; object-fit: cover; border-radius: 8px; border: 1px solid #ddd; }
-
-    /* Toast Notification Container */
-    #toastContainer {
-      position: fixed; top: 20px; right: 20px; z-index: 3000; display: flex; flex-direction: column; gap: 10px;
-    }
-    .toast {
-      background: var(--primary); color: white; padding: 15px 20px; border-radius: 8px;
-      box-shadow: var(--shadow-md); font-weight: 600; display: flex; align-items: center; gap: 10px;
-      font-size: 0.9rem;
-    }
-
-    /* Circular blinking vehicle icon style */
-    .live-vehicle-marker {
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      background: transparent !important;
-      border: none !important;
-    }
+    /* Circular vehicle pin pulse style */
     .live-vehicle-marker .car-marker-container {
       position: relative;
       width: 38px;
       height: 38px;
       border-radius: 50%;
       background: white;
-      box-shadow: 0 0 8px rgba(0,0,0,0.3);
+      box-shadow: 0 0 10px rgba(0, 84, 166, 0.3);
       display: flex;
       justify-content: center;
       align-items: center;
       border: 3px solid var(--vehicle-color, var(--primary));
-      transition: all 0.2s ease;
     }
     .live-vehicle-marker .car-marker-container i {
       font-size: 16px;
@@ -266,7 +318,7 @@
 <body>
   <header class="mobile-header">
     <div class="header-top">
-      <div class="header-title" id="driverTitle">기사용 배송앱</div>
+      <div class="header-title" id="driverTitle"><i class="fa-solid fa-truck-ramp-box"></i> FLEX 배송</div>
       <div style="display:flex; align-items:center; gap:15px;">
         <!-- 테마 전환 버튼 (다크모드 지원) -->
         <button id="themeToggleBtn" style="background:none; border:none; color:white; font-size:1.2rem; cursor:pointer;" title="테마 변경"><i class="fa-solid fa-moon"></i></button>
@@ -276,7 +328,23 @@
         </div>
       </div>
     </div>
-    <div style="font-size: 0.9rem; opacity: 0.9;">오늘의 배송 진행률 <span id="progressText">0/0</span></div>
+    
+    <!-- Coupang Flex Style Status Grid -->
+    <div class="flex-dashboard">
+      <div class="dashboard-item">
+        <span class="dashboard-val" id="dashPendingCount" style="color: var(--warning);">0</span>
+        <span class="dashboard-lbl">배송대기</span>
+      </div>
+      <div class="dashboard-item" style="border-left: 1px solid rgba(255,255,255,0.15); border-right: 1px solid rgba(255,255,255,0.15);">
+        <span class="dashboard-val" id="dashDoneCount" style="color: #00e676;">0</span>
+        <span class="dashboard-lbl">배송완료</span>
+      </div>
+      <div class="dashboard-item">
+        <span class="dashboard-val" id="dashExcludedCount" style="color: #b2bec3;">0</span>
+        <span class="dashboard-lbl">배송제외</span>
+      </div>
+    </div>
+    
     <div class="progress-container"><div class="progress-bar" id="progressBar"></div></div>
   </header>
   
@@ -284,7 +352,7 @@
 
   <!-- Top Action Bar -->
   <div class="top-actions">
-    <button class="btn-top btn-start" id="btnStartRoute" style="flex: 1; display: flex; justify-content: center; align-items: center; gap: 8px; font-size: 1.1rem; padding: 12px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.15);"><i class="fa-solid fa-truck-fast" style="font-size:1.2rem;"></i> 배송출발 (업무시작)</button>
+    <button class="btn-top btn-start" id="btnStartRoute"><i class="fa-solid fa-truck-fast"></i> 배송출발 (업무시작)</button>
   </div>
 
   <main class="list-container" id="deliveryList">
@@ -293,6 +361,7 @@
 
   <nav class="bottom-nav">
     <button class="nav-btn active" id="navListBtn"><i class="fa-solid fa-list-check"></i>배송목록</button>
+    <button class="nav-btn" id="navMapBtn"><i class="fa-solid fa-map-location-dot"></i>배송지도</button>
     <button class="nav-btn" id="navPhotoBtn"><i class="fa-solid fa-camera"></i>사진등록</button>
     <button class="nav-btn" id="navMyInfoBtn"><i class="fa-solid fa-user"></i>내정보</button>
   </nav>
@@ -1196,24 +1265,52 @@
         else if(item.status === 'delivering') statusText = '배송중';
         else if(isExcluded) statusText = '배송제외';
 
+        let badgeBg = 'rgba(241, 196, 15, 0.12)';
+        let badgeColor = '#f1c40f';
+        if (item.status === 'done') {
+          badgeBg = 'rgba(46, 204, 113, 0.12)';
+          badgeColor = '#2ecc71';
+        } else if (item.status === 'delivering') {
+          badgeBg = 'rgba(0, 84, 166, 0.12)';
+          badgeColor = '#0054A6';
+        } else if (isExcluded) {
+          badgeBg = '#eee';
+          badgeColor = '#999';
+        }
+
         card.innerHTML = `
           <div class="card-header">
             <span class="place-name" style="${isExcluded ? 'text-decoration:line-through; color:#999;' : ''}">${item.order || '-'}순번. ${item.name}</span>
-            <span style="font-size: 0.8rem; color: ${isExcluded ? '#999' : (item.status === 'done' ? 'var(--success)' : (item.status==='delivering' ? 'var(--primary)' : 'var(--warning)'))}; font-weight:bold;">
+            <span class="status-badge" style="background: ${badgeBg}; color: ${badgeColor};">
               ${statusText}
             </span>
           </div>
+          <div class="card-body-info">
+            <div class="info-row"><i class="fa-solid fa-map-marker-alt"></i> <span>${item.address1} ${item.address2 || ''}</span></div>
+            <div class="info-row"><i class="fa-solid fa-box"></i> <span><strong>${item.boxCount || 0}</strong> 박스 (배송수량)</span></div>
+            ${item.memo ? `<div class="info-row" style="color: #e74c3c; font-weight:700;"><i class="fa-solid fa-note-sticky"></i> <span>${item.memo}</span></div>` : ''}
+          </div>
           <div class="btn-group">
-            <button class="btn-action btn-detail" onclick="showDetail(${item.id})" ${isExcluded ? 'disabled' : ''}><i class="fa-solid fa-list"></i> 상세보기</button>
+            <button class="btn-action btn-detail" onclick="showDetail(${item.id})" ${isExcluded ? 'disabled' : ''}><i class="fa-solid fa-circle-info"></i> 상세</button>
             <button class="btn-action btn-navi" onclick="openNavi('${item.name}', ${item.latitude}, ${item.longitude})" ${isExcluded ? 'disabled' : ''}><i class="fa-solid fa-location-arrow"></i> 길안내</button>
-            <button class="btn-action btn-complete" onclick="completeDelivery(${item.id})" ${item.status === 'done' || isExcluded ? 'disabled' : ''}><i class="fa-solid fa-check"></i> 완료</button>
+            <button class="btn-action btn-complete" onclick="completeDelivery(${item.id})" ${item.status === 'done' || isExcluded ? 'disabled' : ''}><i class="fa-solid fa-circle-check"></i> 완료</button>
           </div>
         `;
         listEl.appendChild(card);
       });
 
+      const pendingCount = currentData.filter(d => d.status !== 'done' && d.status !== 'excluded').length;
+      const excludedCount = currentData.filter(d => d.status === 'excluded').length;
+      
+      const dashPending = document.getElementById('dashPendingCount');
+      const dashDone = document.getElementById('dashDoneCount');
+      const dashExcluded = document.getElementById('dashExcludedCount');
+      
+      if(dashPending) dashPending.textContent = pendingCount;
+      if(dashDone) dashDone.textContent = doneCount;
+      if(dashExcluded) dashExcluded.textContent = excludedCount;
+
       const progressPercent = currentData.length > 0 ? (doneCount / currentData.length) * 100 : 0;
-      document.getElementById('progressText').textContent = `${doneCount} / ${currentData.length}`;
       document.getElementById('progressBar').style.width = `${progressPercent}%`;
     }
 
@@ -1231,6 +1328,47 @@
           const isDark = document.body.classList.contains('dark-mode');
           themeBtn.innerHTML = isDark ? '<i class="fa-solid fa-sun"></i>' : '<i class="fa-solid fa-moon"></i>';
           localStorage.setItem('theme', isDark ? 'dark' : 'light');
+        });
+      }
+      
+      // 하단 탭 내비게이션 전환 (목록보기 vs 지도보기)
+      const listBtn = document.getElementById('navListBtn');
+      const mapBtn = document.getElementById('navMapBtn');
+      const listContainer = document.querySelector('.list-container');
+      const mapContainer = document.getElementById('driverMap');
+      const topActions = document.querySelector('.top-actions');
+
+      if (listBtn && mapBtn) {
+        listBtn.addEventListener('click', () => {
+          listBtn.classList.add('active');
+          mapBtn.classList.remove('active');
+          
+          if(listContainer) listContainer.style.display = 'block';
+          if(topActions) topActions.style.display = 'flex';
+          
+          if(mapContainer) {
+            mapContainer.classList.remove('full-map');
+            mapContainer.style.display = 'block';
+          }
+          if(map) {
+            setTimeout(() => { map.invalidateSize(); }, 200);
+          }
+        });
+
+        mapBtn.addEventListener('click', () => {
+          mapBtn.classList.add('active');
+          listBtn.classList.remove('active');
+          
+          if(listContainer) listContainer.style.display = 'none';
+          if(topActions) topActions.style.display = 'none';
+          
+          if(mapContainer) {
+            mapContainer.classList.add('full-map');
+            mapContainer.style.display = 'block';
+          }
+          if(map) {
+            setTimeout(() => { map.invalidateSize(); }, 200);
+          }
         });
       }
       
