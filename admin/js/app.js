@@ -1527,16 +1527,20 @@ function handleExcelUpload(e) {
       const jsonData = XLSX.utils.sheet_to_json(firstSheet);
       
       // 엑셀 양식 매핑 로직 (배송처명, 주소, 연락처 등)
-      const mappedData = jsonData.map(row => ({
-        name: row['배송처명'] || row['이름'] || '이름없음',
-        address1: row['주소'] || row['도로명주소'] || '',
-        phone: row['연락처'] || row['전화번호'] || '',
-        memo: row['메모'] || '',
-        boxCount: parseInt(row['수량']) || 1,
-        // 가짜 위경도 (실제로는 서버에서 Geocoding 필요)
-        latitude: 37.5 + (Math.random() * 0.1),
-        longitude: 127.0 + (Math.random() * 0.2)
-      })).filter(d => d.name !== '이름없음' && d.address1 !== '');
+      const mappedData = jsonData.map(row => {
+        // 하남시 본사 근처로 임시 위경도 분산 지정
+        const randLat = 37.556898 + (Math.random() * 0.04 - 0.02);
+        const randLng = 127.206401 + (Math.random() * 0.04 - 0.02);
+        return {
+          name: row['배송처명'] || row['이름'] || '이름없음',
+          address1: row['주소'] || row['도로명주소'] || '',
+          phone: row['연락처'] || row['전화번호'] || '',
+          memo: row['메모'] || '',
+          boxCount: parseInt(row['수량']) || 1,
+          latitude: parseFloat(randLat.toFixed(6)),
+          longitude: parseFloat(randLng.toFixed(6))
+        };
+      }).filter(d => d.name !== '이름없음' && d.address1 !== '');
 
       if(mappedData.length === 0) { alert('유효한 데이터가 없습니다. 엑셀 헤더(배송처명, 주소)를 확인해주세요.'); return; }
 
@@ -1665,17 +1669,28 @@ function execDaumPostcode() {
     oncomplete: async function(data) {
       const addr = data.roadAddress || data.jibunAddress;
       document.getElementById('clientAddress1').value = addr;
+      // 괄호 및 법정동 등 Nominatim 검색을 방해하는 부가정보 제거
+      const cleanAddr = addr.replace(/\s*\(.*?\)\s*/g, '').trim();
       try {
-        const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addr)}`);
+        const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(cleanAddr)}`);
         const json = await response.json();
         if(json && json.length > 0) {
           document.getElementById('clientLat').value = parseFloat(json[0].lat).toFixed(6);
           document.getElementById('clientLng').value = parseFloat(json[0].lon).toFixed(6);
         } else {
-          document.getElementById('clientLat').value = "37.5" + Math.floor(Math.random() * 9999);
-          document.getElementById('clientLng').value = "127.0" + Math.floor(Math.random() * 9999);
+          // 본사(하남) 근처 임시 좌표로 정밀 보정
+          const fallbackLat = 37.556898 + (Math.random() * 0.04 - 0.02);
+          const fallbackLng = 127.206401 + (Math.random() * 0.04 - 0.02);
+          document.getElementById('clientLat').value = fallbackLat.toFixed(6);
+          document.getElementById('clientLng').value = fallbackLng.toFixed(6);
         }
-      } catch(e) { console.error('Geocoding error', e); }
+      } catch(e) { 
+        console.error('Geocoding error', e); 
+        const fallbackLat = 37.556898 + (Math.random() * 0.04 - 0.02);
+        const fallbackLng = 127.206401 + (Math.random() * 0.04 - 0.02);
+        document.getElementById('clientLat').value = fallbackLat.toFixed(6);
+        document.getElementById('clientLng').value = fallbackLng.toFixed(6);
+      }
       document.getElementById('clientAddress2').focus();
     }
   }).open();

@@ -1359,6 +1359,9 @@
     }
 
     // [고도화] 테마 설정 및 초기 기기 바인딩
+    window.loadDriverData = loadDriverData;
+    window.checkNotice = checkNotice;
+
     window.initApp = function() {
       const themeBtn = document.getElementById('themeToggleBtn');
       if (themeBtn) {

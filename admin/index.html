@@ -44,7 +44,12 @@
 
     #map { width: 100%; flex: 1; background: #e5e3df; z-index: 1; min-height: 400px; }
     .map-container { display: flex; flex-direction: column; height: 100%; position: relative; }
-    .map-overlay { position: absolute; top: 20px; right: 20px; background: rgba(255,255,255,0.95); padding: 20px; border-radius: 12px; box-shadow: var(--shadow-md); width: 320px; z-index: 1000; font-size: 1.05rem; border: 1px solid var(--border-color); }
+    .map-overlay { position: absolute; top: 20px; right: 20px; background: rgba(255,255,255,0.95); padding: 20px; border-radius: 12px; box-shadow: var(--shadow-md); width: 320px; z-index: 1000; font-size: 1.05rem; border: 1px solid var(--border-color); max-height: calc(100% - 80px); display: flex; flex-direction: column; }
+    #vehicleStatus { flex: 1; overflow-y: auto; padding-right: 5px; }
+    #vehicleStatus::-webkit-scrollbar { width: 6px; }
+    #vehicleStatus::-webkit-scrollbar-track { background: transparent; }
+    #vehicleStatus::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 3px; }
+    #vehicleStatus::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.3); }
     .sim-overlay { position: absolute; bottom: 20px; left: 20px; background: rgba(255,255,255,0.95); padding: 15px; border-radius: 8px; box-shadow: var(--shadow-md); z-index: 1000; display:flex; gap: 10px; align-items:center;}
     
     .data-table { width: 100%; border-collapse: collapse; }
