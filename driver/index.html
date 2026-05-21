@@ -485,7 +485,7 @@
     };
 
     // Custom Dialog Wrapper
-    function showDialog(title, msg, isConfirm = false, onConfirm = null) {
+    function showDialog(title, msg, isConfirm = false, onConfirm = null, confirmText = '확인') {
       document.getElementById('dialogTitle').textContent = title;
       document.getElementById('dialogMsg').innerHTML = msg.replace(/\n/g, '<br>');
       document.getElementById('dialogCancel').style.display = isConfirm ? 'block' : 'none';
@@ -495,6 +495,7 @@
       const btnCancel = document.getElementById('dialogCancel');
       
       const newConfirm = btnConfirm.cloneNode(true);
+      newConfirm.innerHTML = confirmText;
       btnConfirm.parentNode.replaceChild(newConfirm, btnConfirm);
       const newCancel = btnCancel.cloneNode(true);
       btnCancel.parentNode.replaceChild(newCancel, btnCancel);
@@ -723,6 +724,18 @@
               await api.updateDriverLocation(currentUserCourse, lat, lng);
               lastUpdateData = { lat, lng, time: now };
               console.log('위치 갱신 성공:', lat, lng);
+
+              // HQ 복귀 완료 확인 (본사 100m 이내 접근 시 자동 로그아웃)
+              if (localStorage.getItem('returningToHQ') === 'true') {
+                const distToHQ = getDist(lat, lng, 37.556898, 127.206401);
+                if (distToHQ < 0.1) {
+                  localStorage.removeItem('returningToHQ');
+                  alert('HQ 복귀가 완료되었습니다. 고생하셨습니다! 앱을 종료합니다.');
+                  localStorage.removeItem('authUser');
+                  window.location.href = '../index.html';
+                  return;
+                }
+              }
             } catch (e) {
               console.error('위치 갱신 실패:', e);
             }
@@ -767,6 +780,20 @@
         // 2. 백엔드에 기사 위치 전송 (전체 관리자 대시보드 실시간 이동 연동)
         try {
           await api.updateDriverLocation(currentUserCourse, lat, lng);
+
+          // HQ 복귀 완료 확인 (시뮬레이션 용)
+          if (localStorage.getItem('returningToHQ') === 'true') {
+            const distToHQ = getDist(lat, lng, 37.556898, 127.206401);
+            if (distToHQ < 0.1) {
+              clearInterval(driverSimInterval);
+              driverSimInterval = null;
+              localStorage.removeItem('returningToHQ');
+              alert('HQ 복귀가 완료되었습니다. 고생하셨습니다! 앱을 종료합니다.');
+              localStorage.removeItem('authUser');
+              window.location.href = '../index.html';
+              return;
+            }
+          }
         } catch (e) {
           console.warn("실시간 시뮬레이션 위치 백엔드 전송 오류:", e);
         }
@@ -1132,8 +1159,15 @@
 
     // 배송 완료 서명 모달 오픈
     // 배송 완료 즉시 처리 (서명패드 없이 완료)
-    window.completeDelivery = async function(id) {
+    window.completeDelivery = async function(id, btnElement) {
       if (!id) return;
+      
+      let originalBtnHtml = '';
+      if (btnElement) {
+        btnElement.disabled = true;
+        originalBtnHtml = btnElement.innerHTML;
+        btnElement.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 처리중';
+      }
       
       const sigBase64 = ""; // 서명 없이 완료하므로 공백 서명 처리
       
@@ -1174,8 +1208,17 @@
           checkNextDeliveryAndNavigate(id);
           renderList();
           await updateMap();
+        } else {
+          if (btnElement) {
+            btnElement.disabled = false;
+            btnElement.innerHTML = originalBtnHtml;
+          }
         }
       } catch (err) {
+        if (btnElement) {
+          btnElement.disabled = false;
+          btnElement.innerHTML = originalBtnHtml;
+        }
         showDialog("오류", "배송 완료 전송 실패: " + err.message);
       }
     };
@@ -1197,7 +1240,10 @@
         const user = JSON.parse(userStr);
         api.sendAdminNotification(`[알림] ${user.name} 기사님 (코스 ${user.course}) 모든 배송을 완료하고 복귀합니다.`);
 
-        showDialog('수고하셨습니다!', '금일 할당된 모든 배송이 완료되었습니다. 안전하게 복귀하시기 바랍니다.');
+        showDialog('고생하셨습니다!', '금일 할당된 모든 배송이 완료되었습니다. 안전하게 복귀하시기 바랍니다.', true, () => {
+          localStorage.setItem('returningToHQ', 'true');
+          window.openNavi('착한식판 본사', 37.556898, 127.206401);
+        }, '복귀');
       }
     }
 
@@ -1405,7 +1451,7 @@
           <div class="btn-group">
             <button class="btn-action btn-detail" onclick="showDetail(${item.id})" ${isExcluded ? 'disabled' : ''}><i class="fa-solid fa-circle-info"></i> 상세</button>
             <button class="btn-action btn-navi" onclick="openNavi('${item.name}', ${item.latitude}, ${item.longitude})" ${isExcluded ? 'disabled' : ''}><i class="fa-solid fa-location-arrow"></i> 길안내</button>
-            <button class="btn-action btn-complete" onclick="completeDelivery(${item.id})" ${item.status === 'done' || isExcluded ? 'disabled' : ''}><i class="fa-solid fa-circle-check"></i> 완료</button>
+            <button class="btn-action btn-complete" onclick="completeDelivery(${item.id}, this)" ${item.status === 'done' || isExcluded ? 'disabled' : ''}><i class="fa-solid fa-circle-check"></i> 완료</button>
           </div>
         `;
         listEl.appendChild(card);
