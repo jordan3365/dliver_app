@@ -735,12 +735,13 @@
               lastUpdateData = { lat, lng, time: now };
               console.log('위치 갱신 성공:', lat, lng);
 
-              // HQ 복귀 완료 확인 (본사 100m 이내 접근 시 자동 로그아웃)
+              // HQ 복귀 완료 확인 (본사 5m 이내 접근 시 자동 로그아웃)
               if (localStorage.getItem('returningToHQ') === 'true') {
                 const distToHQ = getDist(lat, lng, 37.556898, 127.206401);
-                if (distToHQ < 0.1) {
+                if (distToHQ <= 0.005) {
                   localStorage.removeItem('returningToHQ');
-                  alert('HQ 복귀가 완료되었습니다. 고생하셨습니다! 앱을 종료합니다.');
+                  speak('오늘 하루도 고생하셨습니다. 모든 업무를 종료 합니다.');
+                  alert('오늘 하루도 고생하셨습니다. 모든 업무를 종료 합니다.');
                   localStorage.removeItem('authUser');
                   window.location.href = '../index.html';
                   return;
@@ -791,14 +792,15 @@
         try {
           await api.updateDriverLocation(currentUserCourse, lat, lng);
 
-          // HQ 복귀 완료 확인 (시뮬레이션 용)
+          // HQ 복귀 완료 확인 (시뮬레이션 용 - 본사 5m 이내)
           if (localStorage.getItem('returningToHQ') === 'true') {
             const distToHQ = getDist(lat, lng, 37.556898, 127.206401);
-            if (distToHQ < 0.1) {
+            if (distToHQ <= 0.005) {
               clearInterval(driverSimInterval);
               driverSimInterval = null;
               localStorage.removeItem('returningToHQ');
-              alert('HQ 복귀가 완료되었습니다. 고생하셨습니다! 앱을 종료합니다.');
+              speak('오늘 하루도 고생하셨습니다. 모든 업무를 종료 합니다.');
+              alert('오늘 하루도 고생하셨습니다. 모든 업무를 종료 합니다.');
               localStorage.removeItem('authUser');
               window.location.href = '../index.html';
               return;

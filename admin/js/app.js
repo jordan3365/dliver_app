@@ -776,37 +776,29 @@ async function updateMapMarkers(data, drivers = []) {
     const isActive = items.some(it => it.status === 'delivering' || it.status === 'done');
     const isAllDone = items.length > 0 && items.every(it => it.status === 'done');
 
-    if (isActive) {
-      // 1. 배송 완료(done)된 항목이 있는지 확인하여 가장 최신 완료 배송지로 차량 위치 지정
-      const doneItems = items.filter(it => it.status === 'done').sort((a, b) => (a.order || 0) - (b.order || 0));
-      if (doneItems.length > 0) {
-        const lastDone = doneItems[doneItems.length - 1];
-        const latVal = parseFloat(lastDone.latitude);
-        const lngVal = parseFloat(lastDone.longitude);
-        if (!isNaN(latVal) && !isNaN(lngVal)) {
-          carPos = [latVal, lngVal];
-        } else if (driverInfo && driverInfo.currentLocation) {
-          const latGps = parseFloat(driverInfo.currentLocation.lat);
-          const lngGps = parseFloat(driverInfo.currentLocation.lng);
-          if (!isNaN(latGps) && !isNaN(lngGps)) {
-            carPos = [latGps, lngGps];
-            isLiveGps = true;
+    // 1. 최우선: 기사의 실시간 GPS 위치가 수집된 경우
+    if (driverInfo && driverInfo.currentLocation) {
+      const latGps = parseFloat(driverInfo.currentLocation.lat);
+      const lngGps = parseFloat(driverInfo.currentLocation.lng);
+      if (!isNaN(latGps) && !isNaN(lngGps) && latGps !== 0 && lngGps !== 0) {
+        carPos = [latGps, lngGps];
+        isLiveGps = true;
+      }
+    }
+
+    // 2. 실시간 GPS가 없다면 차선책 (가장 최근 완료된 배송지 위치)
+    if (!isLiveGps) {
+      if (isActive) {
+        const doneItems = items.filter(it => it.status === 'done').sort((a, b) => (a.order || 0) - (b.order || 0));
+        if (doneItems.length > 0) {
+          const lastDone = doneItems[doneItems.length - 1];
+          const latVal = parseFloat(lastDone.latitude);
+          const lngVal = parseFloat(lastDone.longitude);
+          if (!isNaN(latVal) && !isNaN(lngVal)) {
+            carPos = [latVal, lngVal];
           }
         }
-      } 
-      // 2. 완료된 항목이 없지만 기사의 실시간 GPS 위치가 수집된 경우
-      else if (driverInfo && driverInfo.currentLocation) {
-        const latVal = parseFloat(driverInfo.currentLocation.lat);
-        const lngVal = parseFloat(driverInfo.currentLocation.lng);
-        if (!isNaN(latVal) && !isNaN(lngVal)) {
-          carPos = [latVal, lngVal];
-          isLiveGps = true;
-        }
       }
-    } else {
-      // 운행 전이거나 활성 배송이 없는 경우 HQ 대기
-      carPos = [HQ_COORD.lat, HQ_COORD.lng];
-      isLiveGps = false;
     }
 
     // 시뮬레이션 중인 코스는 실제/추정 마커를 맵에 중복 표시하지 않음
