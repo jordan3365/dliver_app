@@ -10,12 +10,16 @@ class DeliveryCard extends StatelessWidget {
   final DeliveryItem item;
   final bool isActive;
   final VoidCallback onStateChanged;
+  final bool isRecommended;
+  final double? distance;
 
   const DeliveryCard({
     super.key,
     required this.item,
     required this.isActive,
     required this.onStateChanged,
+    this.isRecommended = false,
+    this.distance,
   });
 
   // 카카오맵 네비게이션 앱/웹 호출
@@ -182,7 +186,7 @@ class DeliveryCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   SizedBox(
-                    height: 80,
+                    height: 55, // 이미지 사이즈 축소
                     child: ListView.builder(
                       scrollDirection: Axis.horizontal,
                       itemCount: item.deliveryPlaceImages.length,
@@ -195,29 +199,29 @@ class DeliveryCard extends StatelessWidget {
                           imageWidget = Image.memory(
                             base64Decode(base64Data),
                             fit: BoxFit.cover,
-                            width: 80,
-                            height: 80,
+                            width: 55,
+                            height: 55,
                           );
                         } else {
                           // 웹상의 Google Drive 또는 일반 URL
                           imageWidget = Image.network(
                             src,
                             fit: BoxFit.cover,
-                            width: 80,
-                            height: 80,
+                            width: 55,
+                            height: 55,
                             errorBuilder: (_, __, ___) => Container(
                               color: Colors.grey[300],
-                              child: const Icon(Icons.broken_image),
+                              child: const Icon(Icons.broken_image, size: 20),
                             ),
                           );
                         }
 
                         return GestureDetector(
-                          onTap: () => _viewLargeImage(context, src),
+                          onTap: () => _viewLargeImage(context, idx), // 인덱스 전달
                           child: Padding(
                             padding: const EdgeInsets.only(right: 8.0),
                             child: ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
+                              borderRadius: BorderRadius.circular(6),
                               child: imageWidget,
                             ),
                           ),
@@ -264,36 +268,102 @@ class DeliveryCard extends StatelessWidget {
     );
   }
 
-  // 이미지 크게 보기
-  void _viewLargeImage(BuildContext context, String src) {
+  // 다중 이미지 크게 보기 (이전 / 다음 슬라이더)
+  void _viewLargeImage(BuildContext context, int initialIndex) {
+    int currentIndex = initialIndex;
     showDialog(
       context: context,
       builder: (context) {
-        Widget img;
-        if (src.startsWith('data:image')) {
-          final base64Data = src.split(',').last;
-          img = Image.memory(base64Decode(base64Data));
-        } else {
-          img = Image.network(src);
-        }
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            final src = item.deliveryPlaceImages[currentIndex];
+            Widget img;
+            if (src.startsWith('data:image')) {
+              final base64Data = src.split(',').last;
+              img = Image.memory(base64Decode(base64Data));
+            } else {
+              img = Image.network(src);
+            }
 
-        return Dialog(
-          backgroundColor: Colors.black,
-          insetPadding: EdgeInsets.zero,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              InteractiveViewer(child: img),
-              Positioned(
-                top: 20,
-                right: 20,
-                child: IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white, size: 30),
-                  onPressed: () => Navigator.pop(context),
-                ),
+            return Dialog(
+              backgroundColor: Colors.black,
+              insetPadding: EdgeInsets.zero,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  InteractiveViewer(child: img),
+                  // 이전 버튼
+                  if (currentIndex > 0)
+                    Positioned(
+                      left: 15,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.5),
+                          shape: BoxShape.circle,
+                        ),
+                        child: IconButton(
+                          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 30),
+                          onPressed: () {
+                            setStateDialog(() {
+                              currentIndex--;
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                  // 다음 버튼
+                  if (currentIndex < item.deliveryPlaceImages.length - 1)
+                    Positioned(
+                      right: 15,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.5),
+                          shape: BoxShape.circle,
+                        ),
+                        child: IconButton(
+                          icon: const Icon(Icons.arrow_forward_ios, color: Colors.white, size: 30),
+                          onPressed: () {
+                            setStateDialog(() {
+                              currentIndex++;
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                  // 닫기 버튼
+                  Positioned(
+                    top: 40,
+                    right: 20,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.5),
+                        shape: BoxShape.circle,
+                      ),
+                      child: IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white, size: 25),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ),
+                  ),
+                  // 페이지 정보 표시
+                  Positioned(
+                    bottom: 40,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.6),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        '${currentIndex + 1} / ${item.deliveryPlaceImages.length}',
+                        style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  )
+                ],
               ),
-            ],
-          ),
+            );
+          }
         );
       },
     );
@@ -329,6 +399,11 @@ class DeliveryCard extends StatelessWidget {
       statusText = '배송중';
       badgeBg = const Color(0x1F0054A6);
       badgeColor = const Color(0xFF0054A6);
+    } else if (isRecommended) {
+      leftBorderColor = const Color(0xFFFFB300); // Amber Border
+      statusText = '추천';
+      badgeBg = const Color(0x1FFFB300);
+      badgeColor = const Color(0xFFFF8F00);
     }
 
     return Opacity(
@@ -336,18 +411,20 @@ class DeliveryCard extends StatelessWidget {
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: isRecommended ? const Color(0xFFFFFDF6) : Colors.white,
           borderRadius: BorderRadius.circular(16),
           border: Border(
             left: BorderSide(
               color: leftBorderColor,
-              width: isActive ? 7.0 : 5.0,
+              width: (isActive || isRecommended) ? 7.0 : 5.0,
             ),
           ),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF0054A6).withOpacity(isActive ? 0.12 : 0.04),
-              blurRadius: isActive ? 12 : 8,
+              color: isRecommended 
+                  ? const Color(0xFFFFB300).withOpacity(0.15)
+                  : const Color(0xFF0054A6).withOpacity(isActive ? 0.12 : 0.04),
+              blurRadius: (isActive || isRecommended) ? 12 : 8,
               offset: const Offset(0, 4),
             ),
           ],
@@ -362,15 +439,38 @@ class DeliveryCard extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Expanded(
-                    child: Text(
-                      '${item.order ?? "-"}순번. ${item.name}',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        decoration: isExcluded ? TextDecoration.lineThrough : null,
-                        color: isExcluded ? Colors.grey : const Color(0xFF1D2129),
-                      ),
-                      overflow: TextOverflow.ellipsis,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (isRecommended)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 4.0),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.star, color: Color(0xFFFFB300), size: 14),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '현재 위치에서 최단거리 추천 ${distance != null ? "(${distance!.toStringAsFixed(1)}km)" : ""}',
+                                  style: const TextStyle(
+                                    color: Color(0xFFFF8F00),
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        Text(
+                          '${item.order ?? "-"}순번. ${item.name}',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            decoration: isExcluded ? TextDecoration.lineThrough : null,
+                            color: isExcluded ? Colors.grey : const Color(0xFF1D2129),
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
                     ),
                   ),
                   Container(

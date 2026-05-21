@@ -123,7 +123,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         child: const Icon(
                           Icons.local_shipping,
                           size: 45,
-                          color: Color(0x0054A6FF), // Web's Coupang Blue
+                          color: Color(0xFF0054A6), // Web's Coupang Blue
                         ),
                       ),
                       const SizedBox(height: 16),

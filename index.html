@@ -126,7 +126,7 @@
     // 초기 상태 강제 리셋
     resetLoginUI();
 
-    // bfcache 대응 (뒤로가기 또는 로그아웃 후 복귀 시 상태 초기화)
+    // bfcache 대응 (뒤로가기 후 복귀 시 상태 초기화)
     window.addEventListener('pageshow', () => {
       resetLoginUI();
     });

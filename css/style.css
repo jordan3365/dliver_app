@@ -168,3 +168,23 @@ body.dark-mode .sidebar {
   border-color: var(--border-color) !important;
   color: var(--text-main);
 }
+
+/* AI Recommendation Tag style */
+.badge-recommend {
+  background: rgba(253, 203, 110, 0.2) !important;
+  color: #d6a21e !important;
+  border: 1px solid rgba(225, 177, 44, 0.4);
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hover-raise {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease;
+}
+.hover-raise:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 24px rgba(108, 92, 231, 0.12);
+}
+

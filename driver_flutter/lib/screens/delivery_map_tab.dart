@@ -26,6 +26,7 @@ class _DeliveryMapTabState extends State<DeliveryMapTab> {
   final MapController _mapController = MapController();
   List<LatLng> _routePoints = [];
   bool _isLoadingRoute = false;
+  String _lastRouteCacheKey = '';
 
   // 본사 고정 좌표
   static final LatLng hqLatLng = const LatLng(37.556898, 127.206401);
@@ -34,6 +35,16 @@ class _DeliveryMapTabState extends State<DeliveryMapTab> {
   void initState() {
     super.initState();
     _loadRoadRoute();
+    if (widget.currentPosition != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _mapController.move(
+            LatLng(widget.currentPosition!.latitude, widget.currentPosition!.longitude),
+            14.5,
+          );
+        }
+      });
+    }
   }
 
   @override
@@ -43,6 +54,18 @@ class _DeliveryMapTabState extends State<DeliveryMapTab> {
     if (oldWidget.deliveries.length != widget.deliveries.length ||
         oldWidget.deliveries.firstOrNull?.status != widget.deliveries.firstOrNull?.status) {
       _loadRoadRoute();
+    }
+
+    // 이전 위치가 null이었는데 실제 좌표를 받아왔다면, 지도를 해당 현재 위치로 부드럽게 이동시킴
+    if (widget.currentPosition != null && oldWidget.currentPosition == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _mapController.move(
+            LatLng(widget.currentPosition!.latitude, widget.currentPosition!.longitude),
+            14.5,
+          );
+        }
+      });
     }
   }
 
@@ -59,22 +82,27 @@ class _DeliveryMapTabState extends State<DeliveryMapTab> {
       return;
     }
 
+    // 본사 -> 1순번 -> 2순번 -> ... -> 본사 형태의 경유 좌표 조립
+    final List<LatLng> coordsList = [hqLatLng];
+    for (var d in activeDeliveries) {
+      coordsList.add(LatLng(d.latitude, d.longitude));
+    }
+    coordsList.add(hqLatLng);
+
+    final String coordsString = coordsList
+        .map((latlng) => '${latlng.longitude},${latlng.latitude}')
+        .join(';');
+
+    // 중복 API 호출 방지 필터링 캐시 체크
+    if (coordsString == _lastRouteCacheKey && _routePoints.isNotEmpty) {
+      return;
+    }
+
     setState(() {
       _isLoadingRoute = true;
     });
 
     try {
-      // 본사 -> 1순번 -> 2순번 -> ... -> 본사 형태의 경유 좌표 조립
-      final List<LatLng> coordsList = [hqLatLng];
-      for (var d in activeDeliveries) {
-        coordsList.add(LatLng(d.latitude, d.longitude));
-      }
-      coordsList.add(hqLatLng);
-
-      final String coordsString = coordsList
-          .map((latlng) => '${latlng.longitude},${latlng.latitude}')
-          .join(';');
-
       final url = Uri.parse(
         'https://router.project-osrm.org/route/v1/driving/$coordsString?overview=full&geometries=geojson',
       );
@@ -90,6 +118,7 @@ class _DeliveryMapTabState extends State<DeliveryMapTab> {
             return LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble());
           }).toList();
 
+          _lastRouteCacheKey = coordsString; // 캐시 키 업데이트
           setState(() {
             _routePoints = roadPoints;
           });
@@ -202,34 +231,54 @@ class _DeliveryMapTabState extends State<DeliveryMapTab> {
       );
     }
 
-    // 기사님 현재 차량 마커
+    // 기사님 현재 차량 마커의 위치 결정 (튕김/왔다갔다 방지 및 항상 노출)
+    LatLng? carPos;
+    bool isLive = false;
+
     if (widget.currentPosition != null) {
-      final carPos = LatLng(widget.currentPosition!.latitude, widget.currentPosition!.longitude);
-      markers.add(
-        Marker(
-          point: carPos,
-          width: 44,
-          height: 44,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: const Color(0xFF0054A6), width: 3),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF0054A6).withOpacity(0.3),
-                      blurRadius: 8,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                ),
-                child: const Icon(Icons.local_shipping, color: Color(0xFF0054A6), size: 18),
+      carPos = LatLng(widget.currentPosition!.latitude, widget.currentPosition!.longitude);
+      isLive = true;
+    } else {
+      // 완료된 마지막 배송지 위치
+      final doneItems = widget.deliveries.where((d) => d.status == 'done').toList();
+      if (doneItems.isNotEmpty) {
+        doneItems.sort((a, b) => (a.order ?? 0).compareTo(b.order ?? 0));
+        final lastDone = doneItems.last;
+        if (lastDone.latitude != null && lastDone.longitude != null) {
+          carPos = LatLng(lastDone.latitude!, lastDone.longitude!);
+        }
+      }
+    }
+    
+    // 만약 둘 다 없으면 본사(HQ) 위치
+    carPos ??= hqLatLng;
+
+    markers.add(
+      Marker(
+        point: carPos,
+        width: 44,
+        height: 44,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(color: const Color(0xFF0054A6), width: 3),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF0054A6).withOpacity(0.3),
+                    blurRadius: 8,
+                    spreadRadius: 2,
+                  ),
+                ],
               ),
+              child: const Icon(Icons.local_shipping, color: Color(0xFF0054A6), size: 18),
+            ),
+            if (isLive)
               Positioned(
                 top: -8,
                 child: Container(
@@ -244,11 +293,10 @@ class _DeliveryMapTabState extends State<DeliveryMapTab> {
                   ),
                 ),
               )
-            ],
-          ),
+          ],
         ),
-      );
-    }
+      ),
+    );
 
     return Stack(
       children: [

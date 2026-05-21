@@ -33,15 +33,40 @@ function saveData() {
 loadData();
 
 class ApiService {
+  constructor() {
+    // 읽기 전용 요청에 대한 인메모리 캐시 (TTL: 3초)
+    this._cache = {};
+    this._cacheReadActions = new Set(['getDeliveryList', 'getDrivers', 'getNotices']);
+  }
+
+  _getCacheKey(action, data) {
+    return `${action}:${JSON.stringify(data)}`;
+  }
+
+  _setCache(key, value) {
+    this._cache[key] = { value, ts: Date.now() };
+  }
+
+  _getCache(key, ttlMs = 3000) {
+    const entry = this._cache[key];
+    if (entry && (Date.now() - entry.ts) < ttlMs) return entry.value;
+    return null;
+  }
+
   async _fetch(action, data = {}) {
     if (useMock) {
-      // Mock 로직은 각 메서드 내부에서 setTimeout 으로 처리됨 (아래 코드들)
       return null;
     } else {
-      // 실제 GAS 통신
+      // 읽기 전용 요청은 3초 캐시 확인 후 재사용 (중복 GAS 호출 원천 차단)
+      if (this._cacheReadActions.has(action)) {
+        const cacheKey = this._getCacheKey(action, data);
+        const cached = this._getCache(cacheKey);
+        if (cached) return cached;
+      }
+
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30초로 연장
+        const timeoutId = setTimeout(() => controller.abort(), 30000);
 
         const url = GAS_WEB_APP_URL + (GAS_WEB_APP_URL.includes('?') ? '&' : '?') + 't=' + Date.now();
         const response = await fetch(url, {
@@ -67,13 +92,18 @@ class ApiService {
           if (responseText.includes("google-signin")) {
             throw new Error("Google 로그인 세션이 만료되었습니다. GAS 웹 앱 설정을 '모든 사용자(Anyone)'로 다시 확인해주세요.");
           }
-          if (responseText.includes("<!DOCTYPE html>")) {
+          if (responseText.includes('<!DOCTYPE html>')) {
             throw new Error("서버에서 HTML 응답이 왔습니다. GAS 웹 앱 배포가 올바른지 확인해주세요.");
           }
           throw new Error("서버 응답이 올바른 JSON 형식이 아닙니다. (GAS 웹 앱 배포 설정 확인 필요)");
         }
         
         if (!result.success) throw new Error(result.error || "알 수 없는 서버 오류");
+
+        // 읽기 전용 성공 응답을 캐시에 저장
+        if (this._cacheReadActions.has(action)) {
+          this._setCache(this._getCacheKey(action, data), result);
+        }
         return result;
       } catch (e) {
         console.error(`API 통신 에러 [${action}]:`, e);

@@ -1,6 +1,9 @@
 import 'dart:convert';
+import 'dart:typed_data';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:geolocator/geolocator.dart';
 import '../models/delivery_item.dart';
 import '../services/api_service.dart';
 import '../widgets/delivery_card.dart';
@@ -11,6 +14,7 @@ class DeliveryListTab extends StatefulWidget {
   final Future<void> Function() onRefresh;
   final bool isDelivering;
   final Future<void> Function() onStartRoute;
+  final Position? currentPosition;
 
   const DeliveryListTab({
     super.key,
@@ -19,6 +23,7 @@ class DeliveryListTab extends StatefulWidget {
     required this.onRefresh,
     required this.isDelivering,
     required this.onStartRoute,
+    this.currentPosition,
   });
 
   @override
@@ -40,6 +45,7 @@ class _DeliveryListTabState extends State<DeliveryListTab> {
 
     DeliveryItem? selectedItem = widget.deliveries.first;
     XFile? pickedFile;
+    Uint8List? pickedFileBytes;
 
     showDialog(
       context: context,
@@ -91,8 +97,10 @@ class _DeliveryListTabState extends State<DeliveryListTab> {
                             imageQuality: 75,
                           );
                           if (file != null) {
+                            final bytes = await file.readAsBytes();
                             setModalState(() {
                               pickedFile = file;
+                              pickedFileBytes = bytes;
                             });
                           }
                         },
@@ -114,8 +122,10 @@ class _DeliveryListTabState extends State<DeliveryListTab> {
                             imageQuality: 75,
                           );
                           if (file != null) {
+                            final bytes = await file.readAsBytes();
                             setModalState(() {
                               pickedFile = file;
+                              pickedFileBytes = bytes;
                             });
                           }
                         },
@@ -129,14 +139,14 @@ class _DeliveryListTabState extends State<DeliveryListTab> {
                       ),
                     ],
                   ),
-                  if (pickedFile != null) ...[
+                  if (pickedFileBytes != null) ...[
                     const SizedBox(height: 12),
                     const Text('선택된 이미지 미리보기:', style: TextStyle(fontSize: 12, color: Colors.grey)),
                     const SizedBox(height: 4),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(8),
-                      child: Image.network(
-                        pickedFile!.path, // Flutter Web/Desktop 호환성 및 로컬 경로
+                      child: Image.memory(
+                        pickedFileBytes!, // Memory image for robust local previews
                         height: 150,
                         width: double.infinity,
                         fit: BoxFit.cover,
@@ -155,15 +165,14 @@ class _DeliveryListTabState extends State<DeliveryListTab> {
                   onPressed: _isUploadingPhoto
                       ? null
                       : () async {
-                          if (pickedFile == null || selectedItem == null) return;
+                          if (pickedFileBytes == null || selectedItem == null) return;
                           
                           setModalState(() {
                             _isUploadingPhoto = true;
                           });
 
                           try {
-                            final bytes = await pickedFile!.readAsBytes();
-                            final base64Image = 'data:image/jpeg;base64,${base64Encode(bytes)}';
+                            final base64Image = 'data:image/jpeg;base64,${base64Encode(pickedFileBytes!)}';
 
                             final updatedImages = List<String>.from(selectedItem!.deliveryPlaceImages);
                             updatedImages.add(base64Image);
@@ -214,6 +223,19 @@ class _DeliveryListTabState extends State<DeliveryListTab> {
     );
   }
 
+  double _getDistance(double lat1, double lon1, double lat2, double lon2) {
+    const double r = 6371; // km
+    final double dLat = (lat2 - lat1) * (math.pi / 180);
+    final double dLon = (lon2 - lon1) * (math.pi / 180);
+    final double a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(lat1 * (math.pi / 180)) *
+            math.cos(lat2 * (math.pi / 180)) *
+            math.sin(dLon / 2) *
+            math.sin(dLon / 2);
+    final double c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+    return r * c;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (widget.isLoading) {
@@ -248,6 +270,28 @@ class _DeliveryListTabState extends State<DeliveryListTab> {
         (d) => d.status != 'done' && d.status != 'excluded',
       ).id;
     } catch (_) {}
+
+    // 기사 최단거리 추천 목적지 계산
+    int? recommendedId;
+    final Map<int, double> distances = {};
+    if (widget.currentPosition != null) {
+      double minDistance = double.infinity;
+      for (var d in widget.deliveries) {
+        if (d.status != 'done' && d.status != 'excluded') {
+          final dist = _getDistance(
+            widget.currentPosition!.latitude,
+            widget.currentPosition!.longitude,
+            d.latitude,
+            d.longitude,
+          );
+          distances[d.id] = dist;
+          if (dist < minDistance) {
+            minDistance = dist;
+            recommendedId = d.id;
+          }
+        }
+      }
+    }
 
     return RefreshIndicator(
       onRefresh: widget.onRefresh,
@@ -288,6 +332,8 @@ class _DeliveryListTabState extends State<DeliveryListTab> {
                   item: item,
                   isActive: isActive,
                   onStateChanged: widget.onRefresh,
+                  isRecommended: item.id == recommendedId,
+                  distance: distances[item.id],
                 );
               },
             ),

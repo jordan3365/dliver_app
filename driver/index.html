@@ -391,9 +391,14 @@
   </div>
 
   <!-- Lightbox Viewer -->
-  <div class="custom-modal-overlay" id="imageViewerModal" style="z-index: 3000; background: rgba(0,0,0,0.9);">
-    <button onclick="document.getElementById('imageViewerModal').classList.remove('active');" style="position:absolute; top:20px; right:20px; background:none; border:none; color:white; font-size:2rem; cursor:pointer;"><i class="fa-solid fa-xmark"></i></button>
-    <img id="viewerImage" src="" style="max-width: 90%; max-height: 80vh; border-radius: 8px;">
+  <div class="custom-modal-overlay" id="imageViewerModal" style="z-index: 3000; background: rgba(0,0,0,0.9); flex-direction: column;">
+    <button onclick="document.getElementById('imageViewerModal').classList.remove('active');" style="position:absolute; top:calc(20px + env(safe-area-inset-top)); right:20px; background:rgba(0,0,0,0.5); border:none; color:white; font-size:2rem; cursor:pointer; width:44px; height:44px; border-radius:50%; display:flex; align-items:center; justify-content:center; z-index: 3010;"><i class="fa-solid fa-xmark"></i></button>
+    <div style="position:relative; width:100%; display:flex; justify-content:center; align-items:center; flex:1;">
+      <button id="viewerPrevBtn" style="position:absolute; left:15px; background:rgba(0,0,0,0.5); border:none; color:white; font-size:1.8rem; cursor:pointer; width:44px; height:44px; border-radius:50%; display:flex; align-items:center; justify-content:center; z-index:3005;"><i class="fa-solid fa-chevron-left"></i></button>
+      <img id="viewerImage" src="" style="max-width: 85%; max-height: 75vh; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+      <button id="viewerNextBtn" style="position:absolute; right:15px; background:rgba(0,0,0,0.5); border:none; color:white; font-size:1.8rem; cursor:pointer; width:44px; height:44px; border-radius:50%; display:flex; align-items:center; justify-content:center; z-index:3005;"><i class="fa-solid fa-chevron-right"></i></button>
+    </div>
+    <div id="viewerCounter" style="color:white; font-weight:800; font-size:1rem; padding:8px 20px; background:rgba(0,0,0,0.6); border-radius:20px; margin-bottom:calc(20px + env(safe-area-inset-bottom));">1 / 1</div>
   </div>
 
   <!-- 사진등록 모달 -->
@@ -520,70 +525,82 @@
       }
       
       let userStr = localStorage.getItem('authUser');
-      // 모바일 브라우저 지연 대응: 최대 15회 재시도 (500ms 간격, 총 7.5초 대기)
+      // 로컬 스토리지 비동기 쓰기 지연 대응 (경량화: 100ms 간격 최대 5회 재시도)
       if (!userStr) {
-        for(let i=0; i<15; i++) {
-          await new Promise(r => setTimeout(r, 500));
+        for (let i = 0; i < 5; i++) {
+          await new Promise(r => setTimeout(r, 100));
           userStr = localStorage.getItem('authUser');
-          if(userStr) break;
+          if (userStr) break;
         }
       }
 
-      if (!userStr) { 
-        console.error('Session not found after retries');
+      let user = null;
+      try {
+        if (userStr) {
+          user = JSON.parse(userStr);
+        }
+      } catch (e) {
+        console.error('Failed to parse authUser:', e);
+        localStorage.removeItem('authUser');
+      }
+
+      // 기사 세션이 아닌 경우(세션 없음, 관리자 포함) → 로그인 화면으로 이동
+      // ※ 관리자 세션으로 이 페이지에 접근하면 로그인창으로 이동 (admin/index.html 자동 포워딩 제거)
+      if (!user || user.role !== 'driver') { 
+        console.warn('Driver session not found or role mismatch. Redirecting to login.');
         window.location.href = '../index.html'; 
         return; 
       }
       
       // 뒤로가기로 기사앱이 튕겨 나가는 것을 막기 위한 히스토리 보호막 가동
       history.pushState(null, null, window.location.href);
-      
-      const user = JSON.parse(userStr);
-      if (user.role !== 'driver') { window.location.href = '../index.html'; return; }
       currentUserCourse = user.course;
 
       document.getElementById('driverTitle').textContent = `${user.name} 기사님 (코스 ${user.course})`;
 
-      // Top Actions - 배송출발 버튼 클릭 시 즉각 배송 업무 진입 (중간 확인 모달 제거)
+      // Top Actions - 배송출발 버튼 클릭 시 금일 총 배송정보 요약 표시
       document.getElementById('btnStartRoute').addEventListener('click', async () => {
-        try {
-          const btn = document.getElementById('btnStartRoute');
-          btn.disabled = true;
-          btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 배송 진입 중...';
+        const totalDest = currentData.length;
+        const totalBoxes = currentData.reduce((sum, item) => sum + (parseInt(item.boxCount) || 0), 0);
 
-          const res = await api.updateCourseStatus(currentUserCourse, 'delivering');
-          if (res.success) {
-            await loadDriverData();
-            
-            const pendingItems = currentData.filter(d => d.status === 'delivering').sort((a,b) => (a.order||99) - (b.order||99));
-            const firstItem = pendingItems.length > 0 ? pendingItems[0] : null;
+        const msg = `• 총 배송처 : ${totalDest} 개소<br>• 총 배송 수량 : ${totalBoxes} 박스<br><br><strong>배송 업무를 시작하시겠습니까?</strong>`;
 
-            if(firstItem) {
-              startLocationTracking();
-              setTimeout(() => {
-                startDriverSimulation();
-              }, 1500);
-              map.setView([firstItem.latitude, firstItem.longitude], 18);
-              showToast("🚀 배송 업무에 자동으로 진입하였습니다! 안전 운전 하세요.");
-              speak("배송 업무를 시작합니다. 안전 운행 하십시오.");
+        showDialog('🚚 금일 배송정보 요약', msg, true, async () => {
+          try {
+            const btn = document.getElementById('btnStartRoute');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 배송 진입 중...';
+
+            const res = await api.updateCourseStatus(currentUserCourse, 'delivering');
+            if (res.success) {
+              await loadDriverData();
               
-              setTimeout(() => {
-                openNavi(firstItem.name, firstItem.latitude, firstItem.longitude);
-              }, 1000);
+              const pendingItems = currentData.filter(d => d.status === 'delivering' || d.status === 'pending').sort((a,b) => (a.order||99) - (b.order||99));
+              const firstItem = pendingItems.length > 0 ? pendingItems[0] : null;
+
+              if(firstItem) {
+                startLocationTracking();
+                setTimeout(() => {
+                  startDriverSimulation();
+                }, 1500);
+                map.setView([firstItem.latitude, firstItem.longitude], 18);
+                showToast("🚀 배송 업무를 개시하였습니다! 안전 운전 하세요.");
+                speak("배송 업무를 시작합니다. 안전 운행 하십시오.");
+              } else {
+                showDialog('알림', '진행할 배송건이 없습니다.');
+              }
             } else {
-              showDialog('알림', '진행할 배송건이 없습니다.');
+              showDialog('오류', '배송 상태 업데이트에 실패했습니다.');
             }
-          } else {
-            showDialog('오류', '배송 상태 업데이트에 실패했습니다.');
+          } catch (e) {
+            console.error(e);
+            showDialog('오류', '데이터 업데이트 중 오류가 발생했습니다.');
+          } finally {
+            const btn = document.getElementById('btnStartRoute');
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa-solid fa-truck-fast"></i> 배송출발 (업무시작)';
           }
-        } catch (e) {
-          console.error(e);
-          showDialog('오류', '데이터 업데이트 중 오류가 발생했습니다.');
-        } finally {
-          const btn = document.getElementById('btnStartRoute');
-          btn.disabled = false;
-          btn.innerHTML = '<i class="fa-solid fa-truck-fast"></i> 배송출발 (업무시작)';
-        }
+        });
       });
 
       // Bottom Nav Interactions
@@ -695,34 +712,17 @@
           const timeDiff = now - lastUpdateData.time;
           const distDiff = getDist(lat, lng, lastUpdateData.lat, lastUpdateData.lng);
 
+          // 최초 위치 획득 시 지도를 정확히 내 위치 중심으로 포커싱 이동
+          if (lastUpdateData.time === 0 && map) {
+            map.setView([lat, lng], 16);
+          }
+
           // 10m 이상 실질적으로 이동했거나, 대기 중이더라도 60초 생존 주기 보고 시에만 서버 업데이트
           if (lastUpdateData.time === 0 || (timeDiff > 5000 && distDiff > 0.01) || timeDiff > 60000) {
             try {
               await api.updateDriverLocation(currentUserCourse, lat, lng);
               lastUpdateData = { lat, lng, time: now };
               console.log('위치 갱신 성공:', lat, lng);
-
-              const HQ_COORD = { lat: 37.556898, lng: 127.206401 };
-              const distToHQ = getDist(lat, lng, HQ_COORD.lat, HQ_COORD.lng);
-              const allDone = currentData.length > 0 && currentData.every(d => d.status === 'done');
-              
-              if (allDone && distToHQ < 0.1) { 
-                if (!window.hqArrivalAlerted) {
-                  window.hqArrivalAlerted = true;
-                  showDialog('업무 종료', '본사에 도착하였습니다. 오늘 하루도 고생하셨습니다!', true, () => {
-                    localStorage.removeItem('authUser');
-                    document.body.innerHTML = `
-                      <div style="height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:linear-gradient(135deg, #6C5CE7, #00CEC9); color:white; text-align:center; padding:20px;">
-                        <i class="fa-solid fa-circle-check" style="font-size:80px; margin-bottom:20px;"></i>
-                        <h1>업무가 완료되었습니다</h1>
-                        <p style="margin-top:10px; opacity:0.9;">안전하게 퇴근하시기 바랍니다.</p>
-                        <button onclick="window.close(); location.href='about:blank';" class="btn-primary" style="margin-top:30px; background:white; color:var(--primary);">앱 종료</button>
-                      </div>
-                    `;
-                    if (window.close) window.close();
-                  });
-                }
-              }
             } catch (e) {
               console.error('위치 갱신 실패:', e);
             }
@@ -957,18 +957,17 @@
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
     }
 
+    let lastRoadCacheKey = '';
+
     async function updateMap() {
-      markers.forEach(m => map.removeLayer(m));
-      markers = [];
-      if (routePolyline) map.removeLayer(routePolyline);
-      if (carMarker) map.removeLayer(carMarker);
-      
       const bounds = [];
       const rawPoints = []; 
       
       const startPoint = [37.556898, 127.206401]; 
       rawPoints.push(startPoint);
       bounds.push(startPoint);
+
+      const tempMarkers = [];
 
       currentData.forEach(item => {
         if (item.latitude && item.longitude && item.status !== 'excluded') {
@@ -984,8 +983,8 @@
                html: `<i class="fa-solid fa-location-dot" style="color: ${pinColor};"></i><span>${orderText}</span>`,
                iconSize: [30, 40], iconAnchor: [15, 40]
             });
-            const marker = L.marker([lat, lng], {icon: pinIcon}).addTo(map);
-            markers.push(marker);
+            const marker = L.marker([lat, lng], {icon: pinIcon});
+            tempMarkers.push(marker);
             bounds.push([lat, lng]);
             rawPoints.push([lat, lng]);
           } catch(e) {
@@ -994,22 +993,44 @@
         }
       });
 
-      const roadPoints = await getRoadPath(rawPoints);
-      activeRoadPoints = roadPoints; // OSRM 경로 좌표 전역 보관
-      if (roadPoints.length > 1) {
-        routePolyline = L.polyline(roadPoints, {
+      // 캐시 키를 활용한 중복 OSRM 도로 경로 탐색 API 호출 원천 차단
+      const currentCacheKey = rawPoints.map(p => `${p[0]},${p[1]}`).join('|');
+      if (currentCacheKey !== lastRoadCacheKey) {
+        const roadPoints = await getRoadPath(rawPoints);
+        activeRoadPoints = roadPoints;
+        lastRoadCacheKey = currentCacheKey;
+      }
+
+      let tempRoutePolyline = null;
+      if (activeRoadPoints && activeRoadPoints.length > 1) {
+        tempRoutePolyline = L.polyline(activeRoadPoints, {
           color: '#0984e3',
           weight: 10,
           opacity: 0.8,
-          className: 'animated-route-line' // 흐르는 마칭 앤츠 실시간 적용
-        }).addTo(map);
+          className: 'animated-route-line'
+        });
       }
 
-      const doneItems = currentData.filter(d => d.status === 'done');
+      // 차량 마커의 위치 결정 (튕김/왔다갔다 방지 로직)
       let currentPos = startPoint;
-      if(doneItems.length > 0) {
-        const lastDone = doneItems[doneItems.length - 1];
-        currentPos = [lastDone.latitude, lastDone.longitude];
+      if (driverSimInterval && activeRoadPoints && activeRoadPoints[driverSimIndex]) {
+        // A. 주행 시뮬레이션 활성화 상태인 경우
+        const simPos = activeRoadPoints[driverSimIndex];
+        const latSim = parseFloat(simPos[0]);
+        const lngSim = parseFloat(simPos[1]);
+        if (!isNaN(latSim) && !isNaN(lngSim)) {
+          currentPos = [latSim, lngSim];
+        }
+      } else if (lastUpdateData.lat > 0 && lastUpdateData.lng > 0) {
+        // B. 실제 수집된 기사의 실시간 GPS 위치가 있는 경우
+        currentPos = [lastUpdateData.lat, lastUpdateData.lng];
+      } else {
+        // C. 둘 다 없는 경우 마지막 완료지 배송처 또는 본사 대기
+        const doneItems = currentData.filter(d => d.status === 'done');
+        if(doneItems.length > 0) {
+          const lastDone = doneItems[doneItems.length - 1];
+          currentPos = [parseFloat(lastDone.latitude), parseFloat(lastDone.longitude)];
+        }
       }
 
       const carIcon = L.divIcon({
@@ -1021,7 +1042,23 @@
         `,
         iconSize: [38, 38], iconAnchor: [19, 19]
       });
-      carMarker = L.marker(currentPos, {icon: carIcon, zIndexOffset: 1000}).addTo(map);
+      const tempCarMarker = L.marker(currentPos, {icon: carIcon, zIndexOffset: 1000});
+
+      // [더블 버퍼링 기법 - 맵에서 레이어를 제거하고 임시 레이어를 동시에 등록하여 화면 깜빡임 차단]
+      markers.forEach(m => map.removeLayer(m));
+      if (routePolyline) map.removeLayer(routePolyline);
+      if (carMarker) map.removeLayer(carMarker);
+
+      tempMarkers.forEach(m => m.addTo(map));
+      markers = tempMarkers;
+
+      if (tempRoutePolyline) {
+        tempRoutePolyline.addTo(map);
+        routePolyline = tempRoutePolyline;
+      }
+
+      tempCarMarker.addTo(map);
+      carMarker = tempCarMarker;
 
       if (bounds.length > 0) map.fitBounds(bounds, { padding: [40, 40] });
     }
@@ -1153,17 +1190,14 @@
       const nextItem = pendingItems.length > 0 ? pendingItems[0] : null;
 
       if(nextItem) {
-        setTimeout(() => {
-          openNavi(nextItem.name, nextItem.latitude, nextItem.longitude);
-        }, 100);
+        // 자동 내비 연결 삭제
+        showToast(`다음 배송지 [${nextItem.name}]가 대기 중입니다. 길안내 버튼을 눌러 출발해 주세요.`);
       } else {
         const userStr = localStorage.getItem('authUser');
         const user = JSON.parse(userStr);
         api.sendAdminNotification(`[알림] ${user.name} 기사님 (코스 ${user.course}) 모든 배송을 완료하고 복귀합니다.`);
 
-        showDialog('수고하셨습니다!', '모든 배송이 완료되었습니다.\n본사(하남)로 복귀하는 네비게이션을 실행합니다.', true, () => {
-          openNavi('착한식판 본사(복귀)', 37.556898, 127.206401);
-        });
+        showDialog('수고하셨습니다!', '금일 할당된 모든 배송이 완료되었습니다. 안전하게 복귀하시기 바랍니다.');
       }
     }
 
@@ -1199,10 +1233,66 @@
 
     window.addEventListener('online', syncOfflineQueue);
 
-    window.viewImage = function(src) {
-      document.getElementById('viewerImage').src = src;
+    let currentCarouselIndex = 0;
+    let carouselImages = [];
+
+    window.viewImagesCarousel = function(idx, images) {
+      currentCarouselIndex = idx;
+      carouselImages = images;
+      updateCarouselView();
       document.getElementById('imageViewerModal').classList.add('active');
     };
+
+    function updateCarouselView() {
+      if (carouselImages.length === 0) return;
+      const imgUrl = carouselImages[currentCarouselIndex];
+      document.getElementById('viewerImage').src = imgUrl;
+      
+      // 카운터 갱신
+      document.getElementById('viewerCounter').textContent = `${currentCarouselIndex + 1} / ${carouselImages.length}`;
+      
+      // 이전/다음 버튼 보이기/숨기기 제어
+      const prevBtn = document.getElementById('viewerPrevBtn');
+      const nextBtn = document.getElementById('viewerNextBtn');
+      
+      if (currentCarouselIndex > 0) {
+        prevBtn.style.visibility = 'visible';
+      } else {
+        prevBtn.style.visibility = 'hidden';
+      }
+      
+      if (currentCarouselIndex < carouselImages.length - 1) {
+        nextBtn.style.visibility = 'visible';
+      } else {
+        nextBtn.style.visibility = 'hidden';
+      }
+    }
+
+    // 전역 스코프에 카루셀 버튼 리스너 바인딩
+    document.addEventListener('DOMContentLoaded', () => {
+      const prevBtn = document.getElementById('viewerPrevBtn');
+      const nextBtn = document.getElementById('viewerNextBtn');
+      
+      if (prevBtn) {
+        prevBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (currentCarouselIndex > 0) {
+            currentCarouselIndex--;
+            updateCarouselView();
+          }
+        });
+      }
+      
+      if (nextBtn) {
+        nextBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (currentCarouselIndex < carouselImages.length - 1) {
+            currentCarouselIndex++;
+            updateCarouselView();
+          }
+        });
+      }
+    });
 
     window.showDetail = function(id) {
       const item = currentData.find(d => d.id === id);
@@ -1212,10 +1302,11 @@
       const imgData = item.deliveryPlaceImages;
       if(imgData && (Array.isArray(imgData) ? imgData.length > 0 : true)) {
         const images = Array.isArray(imgData) ? imgData : [imgData];
-        imagesHtml = '<div style="margin-top:15px; font-weight:bold; color:var(--primary);">현장 이미지 & 서명</div><div class="detail-images">';
-        images.forEach(src => {
+        imagesHtml = '<div style="margin-top:15px; font-weight:bold; color:var(--primary); font-size:0.9rem; margin-bottom:8px;">현장 이미지 & 서명</div><div class="detail-images" style="display:flex; flex-wrap:wrap; gap:8px;">';
+        images.forEach((src, idx) => {
           const directSrc = getDirectImageUrl(src);
-          imagesHtml += `<img src="${directSrc}" alt="배송처 이미지" onclick="viewImage('${directSrc}')" style="cursor:pointer; box-shadow:0 2px 4px rgba(0,0,0,0.1);">`;
+          // JSON 인자 전달의 특수문자 에러 방지를 위해 Base64 처리 또는 리터럴 안전화
+          imagesHtml += `<img src="${directSrc}" alt="배송처 이미지" onclick="viewImagesCarousel(${idx}, [${images.map(s => `'${getDirectImageUrl(s)}'`).join(',')}])" style="cursor:pointer; box-shadow:0 2px 4px rgba(0,0,0,0.1); width: 55px; height: 55px; object-fit: cover; border-radius: 6px;">`;
         });
         imagesHtml += '</div>';
       }
@@ -1241,24 +1332,13 @@
       }
       
       const encodeName = encodeURIComponent(name);
-      const appUrl = `kakaomap://route?ep=${lat},${lng}&by=CAR`;
+      // 모바일 브라우저의 히스토리 스택 훼손 및 세션 유실 방지를 위해,
+      // PC/모바일 구분 없이 목적지 길안내 웹 링크를 새 탭(_blank)으로 실행합니다.
+      // 이렇게 실행하면 외부 카카오맵 실행 종료/취소 후 기사앱 본래 세션과 탭으로 완벽하고 부드럽게 복귀합니다.
       const webUrl = `https://map.kakao.com/link/to/${encodeName},${lat},${lng}`;
 
-      console.log(`Navigating to ${name} (${lat}, ${lng})`);
-
-      if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
-          history.pushState({navi: 'running'}, '', '');
-          
-          const startTime = Date.now();
-          setTimeout(function() {
-              if (Date.now() - startTime < 2000) {
-                  window.location.href = webUrl;
-              }
-          }, 1500);
-          window.location.href = appUrl;
-      } else {
-          window.open(webUrl, '_blank');
-      }
+      console.log(`Navigating to ${name} (${lat}, ${lng}) via: ${webUrl}`);
+      window.open(webUrl, '_blank');
     };
     
     window.addEventListener('popstate', (e) => {

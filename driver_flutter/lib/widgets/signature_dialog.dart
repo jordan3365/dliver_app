@@ -10,9 +10,7 @@ class SignatureDialog extends StatefulWidget {
   State<SignatureDialog> createState() => _SignatureDialogState();
 }
 
-class _HomeScreenState extends State<SignatureDialog> {
-  // state template
-}
+
 
 class _SignatureDialogState extends State<SignatureDialog> {
   late final SignatureController _controller;

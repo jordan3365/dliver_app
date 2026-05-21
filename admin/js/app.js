@@ -261,13 +261,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('manualRouteBtn').addEventListener('click', executeManualRouting);
     document.getElementById('selectAllRoutes').addEventListener('change', handleSelectAll);
     
-    // 자동 동기화 설정 (5초마다로 변경하여 실시간성 강화)
-    if(dashboardPollingInterval) clearInterval(dashboardPollingInterval);
-    dashboardPollingInterval = setInterval(() => {
-      if (document.getElementById('view-dashboard').classList.contains('active')) {
-        loadDashboardData();
-      }
-    }, 5000);
+    // 중복 폴링 제거: 하단의 단일 setInterval이 모든 자동 갱신을 담당합니다.
     
     // Client Modal Binds
     document.getElementById('addClientBtn').addEventListener('click', openClientModal);
@@ -455,6 +449,39 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     }
 
+    // Sidebar Toggle for Mobile/Tablet
+    const btnToggleSidebar = document.getElementById('btnToggleSidebar');
+    const sidebar = document.querySelector('.sidebar');
+    if (btnToggleSidebar && sidebar) {
+      btnToggleSidebar.addEventListener('click', (e) => {
+        e.stopPropagation();
+        sidebar.classList.toggle('active');
+      });
+      // 사이드바 외부 클릭 시 닫기
+      document.addEventListener('click', (e) => {
+        if (sidebar.classList.contains('active') && !sidebar.contains(e.target) && e.target !== btnToggleSidebar) {
+          sidebar.classList.remove('active');
+        }
+      });
+    }
+
+    // Collapsible Dashboard List Toggle
+    const btnToggleListOverlay = document.getElementById('btnToggleListOverlay');
+    const dashboardGrid = document.querySelector('.dashboard-grid');
+    if (btnToggleListOverlay && dashboardGrid) {
+      btnToggleListOverlay.addEventListener('click', () => {
+        dashboardGrid.classList.toggle('list-collapsed');
+        if (dashboardGrid.classList.contains('list-collapsed')) {
+          btnToggleListOverlay.innerHTML = '<i class="fa-solid fa-list-check"></i> 배송현황 열기';
+          btnToggleListOverlay.style.background = '#f1f2f6';
+        } else {
+          btnToggleListOverlay.innerHTML = '<i class="fa-solid fa-list-check"></i> 배송현황 접기';
+          btnToggleListOverlay.style.background = 'white';
+        }
+        setTimeout(() => map.invalidateSize(), 300);
+      });
+    }
+
     // LocalStorage Event for real-time alerts
     window.addEventListener('storage', (e) => {
       if (e.key === 'adminNotification') {
@@ -466,14 +493,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     await loadDashboardData();
 
-    // 관리자앱 변경사항 실시간 자동 업데이트 (5초 주기로 백그라운드 데이터 갱신)
+    // 실시간 자동 갱신 (7초 → GAS 서버 부하 완화 및 캐시 효율 극대화)
     setInterval(async () => {
       try {
-        await loadDashboardData();
+        await loadDashboardData(true); // true = 백그라운드 폴링 플래그
       } catch (err) {
         console.warn("실시간 데이터 자동 갱신 대기 중...", err);
       }
-    }, 5000);
+    }, 7000);
   } catch (err) {
     console.error("App initialization failed:", err);
     const errorMsg = `
@@ -503,10 +530,14 @@ function initMap() {
    .bindPopup('<b>착한식판 본사</b><br>경기도 하남시 덕풍동 833-1 (출발지/도착지)');
 }
 
-async function loadDashboardData() {
+// isBackground=true이면 백그라운드 폴링이므로 대시보드 외 탭은 재렌더링 생략
+async function loadDashboardData(isBackground = false) {
   try {
-    const deliveryRes = await api.getDeliveryList();
-    const driverRes = await api.getDrivers();
+    // 두 API 요청을 병렬로 실행하여 응답 시간을 절반으로 단축
+    const [deliveryRes, driverRes] = await Promise.all([
+      api.getDeliveryList(),
+      api.getDrivers()
+    ]);
     
     currentData = deliveryRes;
     currentDrivers = driverRes;
@@ -529,17 +560,21 @@ async function loadDashboardData() {
     await updateMapMarkers(currentData, currentDrivers);
     updateVehicleStatus(currentData, currentDrivers);
     
-    if (aiTrafficInterval) clearInterval(aiTrafficInterval);
-    aiTrafficInterval = setInterval(() => {
-      if (currentData) updateVehicleStatus(currentData, currentDrivers);
-    }, 60000); 
+    // aiTrafficInterval 누수 방지: 최초 1회만 등록
+    if (!aiTrafficInterval) {
+      aiTrafficInterval = setInterval(() => {
+        if (currentData) updateVehicleStatus(currentData, currentDrivers);
+      }, 60000);
+    }
 
-    if (document.getElementById('view-routing').classList.contains('active')) renderRoutingView();
-    if (document.getElementById('view-clients').classList.contains('active')) renderClientsView();
-    if (document.getElementById('view-drivers').classList.contains('active')) renderDriversView();
+    // 백그라운드 폴링 시에는 현재 보고 있지 않은 탭을 재렌더링하지 않음 (성능 최적화)
+    if (!isBackground) {
+      if (document.getElementById('view-routing').classList.contains('active')) renderRoutingView();
+      if (document.getElementById('view-clients').classList.contains('active')) renderClientsView();
+      if (document.getElementById('view-drivers').classList.contains('active')) renderDriversView();
+    }
   } catch (error) {
     console.warn('데이터 업데이트 지연 (일시적 오류):', error.message);
-    // 에러 발생 시 UI를 덮어쓰지 않고 기존 상태를 유지 (사용자에게 에러 메시지 미노출)
   }
 }
 
@@ -622,13 +657,9 @@ function renderDashboardList(data) {
 }
 
 async function updateMapMarkers(data, drivers = []) {
-  // 기존 마커 및 경로 제거
-  markers.forEach(m => map.removeLayer(m));
-  markers = [];
-  livePolylines.forEach(p => map.removeLayer(p));
-  liveCarMarkers.forEach(m => map.removeLayer(m));
-  livePolylines = [];
-  liveCarMarkers = [];
+  const tempMarkers = [];
+  const tempLivePolylines = [];
+  const tempLiveCarMarkers = [];
 
   const bounds = [[HQ_COORD.lat, HQ_COORD.lng]];
   const coursePaths = {}; // 코스별 경로 좌표 수집
@@ -649,8 +680,7 @@ async function updateMapMarkers(data, drivers = []) {
   // 새로 추가된 목적지 (배송 완료 후 다음 목적지로 이동 시)
   const newlyAddedDestIds = [...nextDestIds].filter(id => !prevNextDestIds.has(id));
 
-    data.forEach(item => {
-    // 코스가 정의되어 있는 배송처는 누락된 위경도 좌표가 있더라도 살려내서 매핑합니다.
+  data.forEach(item => {
     if (item.course) {
       let lat = parseFloat(item.latitude);
       let lng = parseFloat(item.longitude);
@@ -660,7 +690,6 @@ async function updateMapMarkers(data, drivers = []) {
         console.warn(`[좌표 보정] 배송처 ID: ${item.id} (${item.name})의 위경도 데이터가 비정상(Lat:${item.latitude}, Lng:${item.longitude})이어 본사 인근 임시 좌표로 보정합니다.`);
         lat = HQ_COORD.lat + (Math.random() - 0.5) * 0.006;
         lng = HQ_COORD.lng + (Math.random() - 0.5) * 0.006;
-        // 데이터 객체에도 보정값 반영
         item.latitude = lat;
         item.longitude = lng;
       }
@@ -684,7 +713,7 @@ async function updateMapMarkers(data, drivers = []) {
       });
 
       try {
-        const marker = L.marker([lat, lng], {icon: pinIcon, title: String(item.id)}).addTo(map);
+        const marker = L.marker([lat, lng], {icon: pinIcon, title: String(item.id)});
         
         let statusBadgeClass = item.status === 'done' ? 'badge-done' : (isExcluded ? 'badge-pending' : 'badge-pending');
         let statusLabel = item.status === 'done' ? '완료' : (isExcluded ? '제외' : '대기중');
@@ -699,7 +728,7 @@ async function updateMapMarkers(data, drivers = []) {
           </div>
         `, { autoClose: false, closeOnClick: false });
         
-        markers.push(marker);
+        tempMarkers.push(marker);
         bounds.push([lat, lng]);
 
         if (isNextDest && (isFirstLoad || newlyAddedDestIds.includes(item.id))) {
@@ -736,10 +765,10 @@ async function updateMapMarkers(data, drivers = []) {
   roadPathsResults.forEach(({ course, items, roadPoints }) => {
     const color = getCourseColor(course);
     // 진한 실선으로 표시 (흐르는 듯한 마칭 앤츠 애니메이션 가미)
-    const poly = L.polyline(roadPoints, {color: color, weight: 6, opacity: 0.8, className: 'animated-route-line'}).addTo(map);
-    livePolylines.push(poly);
+    const poly = L.polyline(roadPoints, {color: color, weight: 6, opacity: 0.8, className: 'animated-route-line'});
+    tempLivePolylines.push(poly);
 
-    // 차량 위치 결정 (운행 중일 때만 실시간 GPS 혹은 추정 완료 위치 적용, 미운행/완료 시 HQ 및 LIVE 배지 비활성화)
+    // 차량 위치 결정 (배송 완료된 곳이 있으면 완료된 최신 배송처 위치로 이동)
     const driverInfo = drivers.find(d => String(d.course) === String(course));
     let carPos = [HQ_COORD.lat, HQ_COORD.lng];
     let isLiveGps = false;
@@ -747,26 +776,40 @@ async function updateMapMarkers(data, drivers = []) {
     const isActive = items.some(it => it.status === 'delivering' || it.status === 'done');
     const isAllDone = items.length > 0 && items.every(it => it.status === 'done');
 
-    if (isActive && !isAllDone) {
-      // 배송 운행 중일 때만 실시간 위치 정보 표시
-      if (driverInfo && driverInfo.currentLocation) {
-        carPos = [driverInfo.currentLocation.lat, driverInfo.currentLocation.lng];
-        isLiveGps = true;
-      } else {
-        // GPS 정보가 없을 때만 마지막 완료 지점을 추정 위치로 사용
-        const doneItems = items.filter(it => it.status === 'done');
-        if(doneItems.length > 0) {
-          const lastDone = doneItems[doneItems.length - 1];
-          carPos = [lastDone.latitude, lastDone.longitude];
+    if (isActive) {
+      // 1. 배송 완료(done)된 항목이 있는지 확인하여 가장 최신 완료 배송지로 차량 위치 지정
+      const doneItems = items.filter(it => it.status === 'done').sort((a, b) => (a.order || 0) - (b.order || 0));
+      if (doneItems.length > 0) {
+        const lastDone = doneItems[doneItems.length - 1];
+        const latVal = parseFloat(lastDone.latitude);
+        const lngVal = parseFloat(lastDone.longitude);
+        if (!isNaN(latVal) && !isNaN(lngVal)) {
+          carPos = [latVal, lngVal];
+        } else if (driverInfo && driverInfo.currentLocation) {
+          const latGps = parseFloat(driverInfo.currentLocation.lat);
+          const lngGps = parseFloat(driverInfo.currentLocation.lng);
+          if (!isNaN(latGps) && !isNaN(lngGps)) {
+            carPos = [latGps, lngGps];
+            isLiveGps = true;
+          }
+        }
+      } 
+      // 2. 완료된 항목이 없지만 기사의 실시간 GPS 위치가 수집된 경우
+      else if (driverInfo && driverInfo.currentLocation) {
+        const latVal = parseFloat(driverInfo.currentLocation.lat);
+        const lngVal = parseFloat(driverInfo.currentLocation.lng);
+        if (!isNaN(latVal) && !isNaN(lngVal)) {
+          carPos = [latVal, lngVal];
+          isLiveGps = true;
         }
       }
     } else {
-      // 운행 전이거나 복귀 완료 상태이면 항상 HQ에 위치시키고 LIVE 배지를 원천 비활성화
+      // 운행 전이거나 활성 배송이 없는 경우 HQ 대기
       carPos = [HQ_COORD.lat, HQ_COORD.lng];
       isLiveGps = false;
     }
 
-    // 시뮬레이션 중인 코스는 실제/추정 마커를 맵에 중복 표시하지 않음 (1호차 시뮬레이션 LIVE 오류 해결)
+    // 시뮬레이션 중인 코스는 실제/추정 마커를 맵에 중복 표시하지 않음
     if (simIntervals[course]) {
       return;
     }
@@ -782,7 +825,7 @@ async function updateMapMarkers(data, drivers = []) {
       `,
       iconSize: [38, 38], iconAnchor: [19, 19]
     });
-    const carMarker = L.marker(carPos, {icon: carIcon, zIndexOffset: 500}).addTo(map);
+    const carMarker = L.marker(carPos, {icon: carIcon, zIndexOffset: 500});
 
     let carStatusLabel = '운행 전 (대기)';
     if (isActive && !isAllDone) carStatusLabel = '배송 운행 중';
@@ -796,14 +839,14 @@ async function updateMapMarkers(data, drivers = []) {
       </div>
     `);
 
-    liveCarMarkers.push(carMarker);
+    tempLiveCarMarkers.push(carMarker);
 
     // 근접 알림 체크 (다음 목적지 100m 이내 접근 시 팝업 자동 오픈)
     const nextDest = items.find(it => it.status !== 'done');
     if (nextDest) {
       const dist = getDist(carPos[0], carPos[1], nextDest.latitude, nextDest.longitude);
       if (dist <= 0.1) { // 100m 이내
-        const marker = markers.find(m => m.options.title === String(nextDest.id));
+        const marker = tempMarkers.find(m => m.options.title === String(nextDest.id));
         if (marker && !marker.isPopupOpen()) {
           marker.openPopup();
         }
@@ -811,13 +854,28 @@ async function updateMapMarkers(data, drivers = []) {
     }
   });
 
-  if (bounds.length > 1 && isFirstLoad) {
-    map.fitBounds(bounds, { padding: [50, 50] });
+  // [더블 버퍼링 교체 작업 실행]
+  // 1. 기존에 떠 있던 마커, 폴리라인, 기사 차량 마커를 맵에서 일괄 제거
+  markers.forEach(m => map.removeLayer(m));
+  livePolylines.forEach(p => map.removeLayer(p));
+  liveCarMarkers.forEach(m => map.removeLayer(m));
+
+  // 2. 새로운 마커, 폴리라인, 기사 차량 마커를 일괄 맵에 추가 (깜빡임 원천 차단)
+  tempMarkers.forEach(m => m.addTo(map));
+  tempLivePolylines.forEach(p => p.addTo(map));
+  tempLiveCarMarkers.forEach(m => m.addTo(map));
+
+  // 3. 글로벌 참조 변수 갱신
+  markers = tempMarkers;
+  livePolylines = tempLivePolylines;
+  liveCarMarkers = tempLiveCarMarkers;
+
+  prevNextDestIds = nextDestIds;
+
+  if (isFirstLoad && bounds.length > 1) {
+    map.fitBounds(bounds, {padding: [50, 50]});
     isFirstLoad = false;
   }
-  
-  // 목적지 상태 업데이트
-  prevNextDestIds = nextDestIds;
 }
 
 function updateVehicleStatus(data, drivers = []) {
@@ -1014,7 +1072,7 @@ window.adminUpdateBoxCount = async function(id, count, event) {
     await api.updateBoxCount(id, count);
     
     // 기사앱에 실시간으로 반영하도록 알림 전송 (업데이트 신호용 백그라운드)
-    await api.saveNotice(String(item.course), `<strong>[수량변경 알림]</strong><br>${item.name}의 수량이 ${count}박스로 변경되었습니다. [데이터 갱신 트리거]`, []);
+    await api.saveNotice(String(item.course), `<strong>[수량변경 알림]</strong><br>${item.name}의 수량이 ${count}박스로 변경되었습니다.`, []);
     
     // 화면상 수량 임시 갱신
     item.boxCount = count;
@@ -1240,7 +1298,6 @@ async function executeAutoRouting() {
   btn.disabled = true;
 
   const routeUpdates = [];
-  let c1Order = 1, c2Order = 1;
 
   // Simple Nearest Neighbor from HQ
   let unassigned = [];
@@ -1275,13 +1332,55 @@ async function executeAutoRouting() {
   });
 
   try {
+    // OSRM 최적 경로 정보 요약 생성
+    let summaryText = '🤖 AI 자동 배차 및 경로 최적화가 완료되었습니다!\n\n';
+    const summaries = [];
+    
+    for (const course of availableCourses) {
+      const courseData = routeUpdates.filter(u => u.course === course).sort((a, b) => a.order - b.order);
+      if (courseData.length === 0) continue;
+      
+      let coords = [`${HQ_COORD.lng},${HQ_COORD.lat}`];
+      courseData.forEach(d => {
+        const item = currentData.find(c => c.id === d.id);
+        if (item) coords.push(`${item.longitude},${item.latitude}`);
+      });
+      coords.push(`${HQ_COORD.lng},${HQ_COORD.lat}`);
+
+      try {
+        const url = `https://router.project-osrm.org/route/v1/driving/${coords.join(';')}?overview=false`;
+        const osrmRes = await fetch(url);
+        const osrmData = await osrmRes.json();
+        if (osrmData.code === 'Ok') {
+          const distKm = (osrmData.routes[0].distance / 1000).toFixed(1);
+          const durationMin = Math.round(osrmData.routes[0].duration / 60);
+          summaries.push(`🚚 [코스 ${course}] 배송처 ${courseData.length}개: 예상 거리 ${distKm}km, 예상 시간 약 ${durationMin}분`);
+        }
+      } catch (_) {
+        summaries.push(`🚚 [코스 ${course}] 배송처 ${courseData.length}개: 최단거리 기반 순번 지정 완료`);
+      }
+    }
+    
+    summaryText += summaries.join('\n');
+    summaryText += '\n\n위 추천 최적 배차 정보를 스프레드시트 서버와 연동하시겠습니까?';
+
+    if (!confirm(summaryText)) {
+      btn.innerHTML = '선택항목 자동 할당 (최적화)';
+      btn.disabled = false;
+      return;
+    }
+
     const res = await api.assignRoutes(routeUpdates);
     if(res.success) {
-      alert('자동 할당 및 최단거리 순번 지정 완료!');
+      alert('자동 할당 정보가 서버에 성공적으로 동기화되었습니다!');
       await loadDashboardData(); 
     }
-  } catch (error) { alert('오류가 발생했습니다.'); } 
-  finally { btn.innerHTML = '선택항목 자동 할당 (최적화)'; btn.disabled = false; }
+  } catch (error) { 
+    alert('오류가 발생했습니다.'); 
+  } finally { 
+    btn.innerHTML = '선택항목 자동 할당 (최적화)'; 
+    btn.disabled = false; 
+  }
 }
 
 async function executeManualRouting() {

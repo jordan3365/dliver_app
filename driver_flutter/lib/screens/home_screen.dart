@@ -56,8 +56,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _checkNotices();
     });
 
-    // 30초 간격 기사 위치 보고 및 시뮬레이션 타이머
-    _locationTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+    // 10초 간격 기사 위치 보고 및 시뮬레이션 타이머
+    _locationTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
       _reportLocation();
     });
   }
@@ -283,20 +283,6 @@ class _HomeScreenState extends State<HomeScreen> {
         pos.longitude,
       );
 
-      // 본사 도착 및 업무 완료 자동 복귀 알림 체크
-      final double distanceToHq = _getDistance(
-        pos.latitude,
-        pos.longitude,
-        37.556898,
-        127.206401,
-      );
-
-      final bool allDone = _deliveries.isNotEmpty &&
-          _deliveries.every((d) => d.status == 'done' || d.status == 'excluded');
-
-      if (allDone && distanceToHq < 0.1) { // 100m 이내
-        _handleHqArrival();
-      }
     } catch (_) {}
   }
 
@@ -345,6 +331,47 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _handleStartRoute() async {
+    // 1. 금일 배송 요약 정보 연산
+    final int totalDest = _deliveries.length;
+    final int totalBoxes = _deliveries.fold<int>(0, (sum, item) => sum + (item.boxCount ?? 0));
+
+    // 2. 금일 배송 요약 다이얼로그 오픈
+    final bool? confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('🚚 금일 배송정보 요약', style: TextStyle(fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('• 총 배송처 : $totalDest 개소', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              Text('• 총 배송 수량 : $totalBoxes 박스', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 16),
+              const Text('배송 업무를 시작하시겠습니까?', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF0054A6))),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('취소', style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0054A6),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('확인'),
+            ),
+          ],
+        );
+      }
+    );
+
+    if (confirm != true) return;
+
     setState(() {
       _isLoading = true;
     });
@@ -359,17 +386,11 @@ class _HomeScreenState extends State<HomeScreen> {
         await _fetchData(quiet: true);
         speak("배송 업무를 시작합니다. 안전 운행 하십시오.");
         
-        final nextItem = _deliveries.firstWhere(
-          (d) => d.status == 'delivering',
-          orElse: () => _deliveries.firstWhere((d) => d.status == 'pending'),
-        );
-        
-        // 길안내 연동 실행
         _reportLocation();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('🚀 배송 업무에 자동으로 진입하였습니다! 안전 운전 하세요.'),
+              content: Text('🚀 배송 업무를 개시하였습니다! 안전 운전 하세요.'),
               backgroundColor: Colors.blue,
             ),
           );
@@ -398,6 +419,7 @@ class _HomeScreenState extends State<HomeScreen> {
         onRefresh: () => _fetchData(quiet: true),
         isDelivering: _isDelivering,
         onStartRoute: _handleStartRoute,
+        currentPosition: _currentPosition,
       ),
       DeliveryMapTab(
         deliveries: _deliveries,
