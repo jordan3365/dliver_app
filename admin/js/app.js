@@ -780,7 +780,25 @@ async function updateMapMarkers(data, drivers = []) {
     if (driverInfo && driverInfo.currentLocation) {
       const latGps = parseFloat(driverInfo.currentLocation.lat);
       const lngGps = parseFloat(driverInfo.currentLocation.lng);
-      if (!isNaN(latGps) && !isNaN(lngGps) && latGps !== 0 && lngGps !== 0) {
+      
+      let isRecent = true;
+      const timeStr = driverInfo.currentLocation.updated || driverInfo.currentLocation.timestamp;
+      if (timeStr) {
+        const gpsTime = new Date(timeStr).getTime();
+        if (!isNaN(gpsTime)) {
+          const now = new Date().getTime();
+          // 30분 이상 지난 GPS 데이터는 오래된 데이터로 간주하여 무시
+          if (now - gpsTime > 30 * 60 * 1000) {
+            isRecent = false;
+          }
+        } else {
+          isRecent = false; // 파싱 실패
+        }
+      } else {
+        isRecent = false; // 시간 정보 없음
+      }
+
+      if (isRecent && !isNaN(latGps) && !isNaN(lngGps) && latGps !== 0 && lngGps !== 0) {
         carPos = [latGps, lngGps];
         isLiveGps = true;
       }
@@ -798,6 +816,12 @@ async function updateMapMarkers(data, drivers = []) {
             carPos = [latVal, lngVal];
           }
         }
+      } else {
+        // 운행 전(전체 초기화 상태 등) HQ 대기: 마커가 완벽히 겹쳐서 안 보이는 현상 방지 (방사형 오프셋 배치)
+        const courseNum = parseInt(course) || Math.floor(Math.random() * 10);
+        const angle = courseNum * (Math.PI * 2 / 10); 
+        const radius = 0.00025; // 약 25m 간격으로 둥글게 분산 배치
+        carPos = [HQ_COORD.lat + Math.cos(angle) * radius, HQ_COORD.lng + Math.sin(angle) * radius];
       }
     }
 
@@ -1430,6 +1454,7 @@ async function runSimulation() {
     : [selectedCourse];
 
   // 기존 시뮬레이션 모두 중단 및 초기화
+  const activeSimCourses = Object.keys(simIntervals);
   Object.values(simIntervals).forEach(clearInterval);
   simIntervals = {};
   Object.values(routePolylines).forEach(p => map.removeLayer(p));
@@ -1438,6 +1463,11 @@ async function runSimulation() {
   carMarkers = {};
   if (window.trafficPolylines) window.trafficPolylines.forEach(p => map.removeLayer(p));
   window.trafficPolylines = [];
+  
+  // 강제 중단된 시뮬레이션 코스 상태 복구
+  activeSimCourses.forEach(c => {
+    api.updateCourseStatus(c, 'pending');
+  });
   
   // 시뮬레이션 알림 상태 초기화
   coursesToSim.forEach(c => alertedArrivals.delete(c + '_sim'));
@@ -1534,7 +1564,25 @@ async function runSimulation() {
           if (i >= routeCoords.length) {
             clearInterval(simIntervals[course]);
             delete simIntervals[course];
-            loadDashboardData();
+            
+            // 시뮬레이션 마커 및 라인 정리
+            if (routePolylines[course]) {
+              map.removeLayer(routePolylines[course]);
+              delete routePolylines[course];
+            }
+            if (carMarkers[course]) {
+              map.removeLayer(carMarkers[course]);
+              delete carMarkers[course];
+            }
+            if (window.trafficPolylines) {
+              window.trafficPolylines.forEach(p => map.removeLayer(p));
+              window.trafficPolylines = [];
+            }
+            
+            // 백엔드 상태를 원래대로(pending) 복구하여 초기화
+            api.updateCourseStatus(course, 'pending').then(() => {
+              loadDashboardData();
+            });
             return;
           }
           marker.setLatLng(routeCoords[i]);
