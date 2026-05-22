@@ -199,19 +199,26 @@ function updateBoxCount(payload) {
 function updateCourseStatus(payload) {
   const { course, status } = payload;
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('배송목록');
-  const data = sheet.getDataRange().getValues();
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return { success: true, count: 0 };
+  
+  const data = sheet.getRange(2, 1, lastRow - 1, 12).getValues();
+  let updated = 0;
 
-  // 변경 대상 행 번호와 값을 수집한 뒤 일괄 setValues (GAS API 호출 횟수 최소화)
-  const updates = [];
-  for (let i = 1; i < data.length; i++) {
+  for (let i = 0; i < data.length; i++) {
     if (String(data[i][9]) === String(course) && data[i][11] !== 'done' && data[i][11] !== 'excluded') {
-      updates.push(i + 1);
+      data[i][11] = status;
+      updated++;
     }
   }
-  updates.forEach(rowNum => sheet.getRange(rowNum, 12).setValue(status));
+
+  if (updated > 0) {
+    const statusCol = data.map(r => [r[11]]);
+    sheet.getRange(2, 12, data.length, 1).setValues(statusCol);
+  }
 
   CacheService.getScriptCache().removeAll(['deliveryList_all', 'deliveryList_' + course]);
-  return { success: true, count: updates.length };
+  return { success: true, count: updated };
 }
 
 function resetAllDeliveryStatus() {
@@ -241,18 +248,29 @@ function resetAllDeliveryStatus() {
 function assignRoutes(payload) {
   const routeUpdates = payload;
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('배송목록');
-  const data = sheet.getDataRange().getValues();
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return { success: true, count: 0 };
+
+  const data = sheet.getRange(2, 1, lastRow - 1, 11).getValues();
   let updated = 0;
-  routeUpdates.forEach(update => {
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][0] == update.id) {
-        // 2개 셀을 단일 setValues로 처리
-        sheet.getRange(i + 1, 10, 1, 2).setValues([[update.course, update.order]]);
-        updated++;
-        break;
-      }
+  
+  const updateMap = {};
+  routeUpdates.forEach(u => updateMap[u.id] = u);
+
+  for (let i = 0; i < data.length; i++) {
+    const id = data[i][0];
+    if (updateMap[id]) {
+      data[i][9] = updateMap[id].course;
+      data[i][10] = updateMap[id].order;
+      updated++;
     }
-  });
+  }
+
+  if (updated > 0) {
+    const courseOrderCol = data.map(r => [r[9], r[10]]);
+    sheet.getRange(2, 10, data.length, 2).setValues(courseOrderCol);
+  }
+
   CacheService.getScriptCache().remove('deliveryList_all');
   return { success: true, count: updated };
 }
