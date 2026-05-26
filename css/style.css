@@ -2,21 +2,21 @@
 @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
 
 :root {
-  --primary: #6C5CE7;
-  --primary-hover: #5A4FCF;
-  --secondary: #00CEC9;
-  --bg-color: #f0f2f5; /* Light subtle grey for glassmorphism pop */
-  --surface: rgba(255, 255, 255, 0.7);
+  --primary: #2563EB; /* Modern corporate blue */
+  --primary-hover: #1D4ED8;
+  --secondary: #3B82F6;
+  --bg-color: #F8FAFC; /* Slate 50 */
+  --surface: #FFFFFF;
   --surface-solid: #FFFFFF;
-  --text-main: #2D3436;
-  --text-muted: #636E72;
-  --border-color: rgba(223, 230, 233, 0.6);
-  --success: #00B894;
-  --warning: #FDCB6E;
-  --danger: #FF7675;
-  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.03);
-  --shadow-md: 0 8px 32px rgba(31, 38, 135, 0.07);
-  --radius: 16px;
+  --text-main: #0F172A;
+  --text-muted: #64748B;
+  --border-color: #E2E8F0;
+  --success: #10B981;
+  --warning: #F59E0B;
+  --danger: #EF4444;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.03);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --radius: 10px;
   --font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', sans-serif;
 }
 
@@ -64,9 +64,7 @@ a:hover {
 /* Utilities */
 .glass-panel {
   background: var(--surface);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--border-color);
   box-shadow: var(--shadow-md);
   border-radius: var(--radius);
   transition: background 0.3s ease, border-color 0.3s ease;
@@ -77,19 +75,20 @@ body.dark-mode .glass-panel {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--primary), var(--secondary));
+  background: var(--primary);
   color: white;
   border: none;
   padding: 12px 24px;
   border-radius: 8px;
   font-weight: 600;
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: all 0.2s ease;
 }
 
 .btn-primary:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 12px rgba(108, 92, 231, 0.2);
+  background: var(--primary-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);
 }
 
 .btn-primary:active {
