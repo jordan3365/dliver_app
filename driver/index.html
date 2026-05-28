@@ -595,8 +595,9 @@
                   startDriverSimulation();
                 }, 1500);
                 map.setView([firstItem.latitude, firstItem.longitude], 18);
-                showToast("🚀 배송 업무를 개시하였습니다! 안전 운전 하세요.");
-                speak("배송 업무를 시작합니다. 안전 운행 하십시오.");
+                showToast("🚀 배송 업무를 개시하였습니다! 첫 목적지로 길안내를 시작합니다.");
+                speak("배송 업무를 시작합니다. 첫 목적지로 안내합니다. 안전 운행 하십시오.");
+                openNavi(firstItem.name, firstItem.latitude, firstItem.longitude);
               } else {
                 showDialog('알림', '진행할 배송건이 없습니다.');
               }
@@ -710,7 +711,23 @@
 
     // 실시간 위치 추적 로직
     let locationWatchId = null;
+    let locationTimerId = null;
     let lastUpdateData = { lat: 0, lng: 0, time: 0 };
+
+    function checkHQArrival(lat, lng) {
+      if (localStorage.getItem('returningToHQ') === 'true') {
+        const distToHQ = getDist(lat, lng, 37.556898, 127.206401);
+        if (distToHQ <= 0.005) {
+          localStorage.removeItem('returningToHQ');
+          speak('오늘 하루도 고생하셨습니다. 모든 업무를 종료 합니다.');
+          alert('오늘 하루도 고생하셨습니다. 모든 업무를 종료 합니다.');
+          localStorage.removeItem('authUser');
+          window.location.href = '../index.html';
+          return true;
+        }
+      }
+      return false;
+    }
 
     function startLocationTracking() {
       if (locationWatchId) return; 
@@ -733,31 +750,44 @@
             try {
               await api.updateDriverLocation(currentUserCourse, lat, lng);
               lastUpdateData = { lat, lng, time: now };
-              console.log('위치 갱신 성공:', lat, lng);
-
-              // HQ 복귀 완료 확인 (본사 5m 이내 접근 시 자동 로그아웃)
-              if (localStorage.getItem('returningToHQ') === 'true') {
-                const distToHQ = getDist(lat, lng, 37.556898, 127.206401);
-                if (distToHQ <= 0.005) {
-                  localStorage.removeItem('returningToHQ');
-                  speak('오늘 하루도 고생하셨습니다. 모든 업무를 종료 합니다.');
-                  alert('오늘 하루도 고생하셨습니다. 모든 업무를 종료 합니다.');
-                  localStorage.removeItem('authUser');
-                  window.location.href = '../index.html';
-                  return;
-                }
-              }
+              console.log('위치 갱신 성공(watch):', lat, lng);
+              if (checkHQArrival(lat, lng)) return;
             } catch (e) {
               console.error('위치 갱신 실패:', e);
             }
           }
         },
         (err) => {
-          console.error('GPS 에러:', err);
-          showDialog('GPS 수신 불가', '스마트폰의 실시간 배송 관제를 위해 기기의 위치(GPS) 정보 활성화 및 브라우저 권한 허용이 무조건 요구됩니다. 설정 상태를 확인해 주세요.');
+          console.warn('GPS 에러(watch):', err);
         },
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
       );
+
+      // 타이머 기반 강제 폴백 위치 보고 (10초 주기) - watchPosition이 정지 상태에서 이벤트를 발생시키지 않는 문제(Hanging) 방지
+      if (!locationTimerId) {
+        locationTimerId = setInterval(() => {
+          navigator.geolocation.getCurrentPosition(
+            async (pos) => {
+              const lat = pos.coords.latitude;
+              const lng = pos.coords.longitude;
+              const now = Date.now();
+              const timeDiff = now - lastUpdateData.time;
+              
+              // watchPosition이 30초 이상 이벤트를 발생시키지 않거나 최초인 경우 강제 갱신
+              if (timeDiff > 30000 || lastUpdateData.time === 0) {
+                try {
+                  await api.updateDriverLocation(currentUserCourse, lat, lng);
+                  lastUpdateData = { lat, lng, time: now };
+                  console.log('위치 갱신 성공(timer):', lat, lng);
+                  if (checkHQArrival(lat, lng)) return;
+                } catch (e) {}
+              }
+            },
+            (err) => {},
+            { enableHighAccuracy: true, timeout: 5000, maximumAge: 10000 }
+          );
+        }, 10000);
+      }
     }
 
     function startDriverSimulation() {
@@ -887,7 +917,8 @@
       utterance.lang = 'ko-KR';
       
       if (sysVoices.length === 0) sysVoices = window.speechSynthesis.getVoices();
-      const preferredVoices = ['Google 한국의', 'Microsoft SunHi', 'Microsoft InJoon', 'Yuna', 'Sora'];
+      // 자연스러운 구글 여성 음성을 최우선으로 매핑 (Google 한국의, ko-KR)
+      const preferredVoices = ['Google 한국의', 'ko-KR', 'Microsoft SunHi', 'Yuna', 'Sora'];
       let selectedVoice = null;
       
       for (let pref of preferredVoices) {
@@ -899,7 +930,7 @@
       if (selectedVoice) utterance.voice = selectedVoice;
       
       utterance.rate = 1.0;
-      utterance.pitch = 1.0;
+      utterance.pitch = 1.1; // 여성 음색에 맞춰 피치 살짝 조정
 
       // 스피치 실패 시 캔슬 복구 안전핀
       utterance.onerror = (event) => {
@@ -1020,9 +1051,24 @@
             const pinIcon = L.divIcon({
                className: 'map-pin',
                html: `<i class="fa-solid fa-location-dot" style="color: ${pinColor};"></i><span>${orderText}</span>`,
-               iconSize: [30, 40], iconAnchor: [15, 40]
+               iconSize: [30, 40], iconAnchor: [15, 40], popupAnchor: [0, -40]
             });
-            const marker = L.marker([lat, lng], {icon: pinIcon});
+            const marker = L.marker([lat, lng], {icon: pinIcon, title: String(item.id)});
+            
+            let badgeBg = item.status === 'done' ? 'rgba(46, 204, 113, 0.12)' : 'rgba(0, 84, 166, 0.12)';
+            let badgeColor = item.status === 'done' ? '#2ecc71' : '#0054A6';
+            let statusLabel = item.status === 'done' ? '완료' : '대기중';
+            
+            marker.bindPopup(`
+              <div style="text-align:center; min-width: 140px; padding: 5px;">
+                <h4 style="margin:0 0 8px 0; font-size: 1.1rem;">${item.name}</h4>
+                <span style="background: ${badgeBg}; color: ${badgeColor}; font-size: 0.75rem; padding: 4px 10px; border-radius: 12px; font-weight: 800;">${statusLabel}</span>
+                <div style="font-size:0.85rem; margin:10px 0;">수량: <strong>${item.boxCount || 0}</strong> 박스</div>
+                <div style="font-size:0.8rem; margin-bottom:12px; color:#666; word-break: keep-all;">${item.address1}</div>
+                <button onclick="showDetail(${item.id})" style="padding: 8px; background: var(--primary); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9rem; font-weight: bold; width: 100%; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">상세 정보 보기</button>
+              </div>
+            `);
+            
             tempMarkers.push(marker);
             bounds.push([lat, lng]);
             rawPoints.push([lat, lng]);
@@ -1100,6 +1146,27 @@
       carMarker = tempCarMarker;
 
       if (bounds.length > 0) map.fitBounds(bounds, { padding: [40, 40] });
+
+      // 기사가 배송처 근처(100m 이내)에 도착하면 핀 팝업 자동 오픈
+      const nextDest = currentData.find(it => it.status !== 'done' && it.status !== 'excluded');
+      if (nextDest && currentPos && currentPos[0] > 0) {
+        const dist = getDist(currentPos[0], currentPos[1], nextDest.latitude, nextDest.longitude);
+        if (dist <= 0.1) {
+          const markerToOpen = tempMarkers.find(m => m.options.title === String(nextDest.id));
+          if (markerToOpen && !markerToOpen.isPopupOpen()) {
+            markerToOpen.openPopup();
+          }
+          // 도착 시 내비게이션 창이 열려있다면 자동으로 닫기 (기사앱으로 복귀 유도)
+          if (window.activeNaviWindow && !window.activeNaviWindow.closed) {
+            try {
+              window.activeNaviWindow.close();
+              window.activeNaviWindow = null;
+              showToast("목적지에 근접하여 길안내를 자동 종료합니다.");
+              speak("목적지에 근접하여 길안내를 종료합니다.");
+            } catch(e) { console.warn("Navi window close failed", e); }
+          }
+        }
+      }
     }
 
     // [고도화] 서명 캔버스 제어 기능
@@ -1245,8 +1312,9 @@
       const nextItem = pendingItems.length > 0 ? pendingItems[0] : null;
 
       if(nextItem) {
-        // 자동 내비 연결 삭제
-        showToast(`다음 배송지 [${nextItem.name}]가 대기 중입니다. 길안내 버튼을 눌러 출발해 주세요.`);
+        // 다음 배송처 네비게이션 자동연결
+        showToast(`다음 배송지 [${nextItem.name}]로 자동 길안내를 시작합니다.`);
+        openNavi(nextItem.name, nextItem.latitude, nextItem.longitude);
       } else {
         const userStr = localStorage.getItem('authUser');
         const user = JSON.parse(userStr);
@@ -1396,7 +1464,7 @@
       const webUrl = `https://map.kakao.com/link/to/${encodeName},${lat},${lng}`;
 
       console.log(`Navigating to ${name} (${lat}, ${lng}) via: ${webUrl}`);
-      window.open(webUrl, '_blank');
+      window.activeNaviWindow = window.open(webUrl, '_blank');
     };
     
     window.addEventListener('popstate', (e) => {

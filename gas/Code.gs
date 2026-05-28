@@ -363,13 +363,13 @@ function getDrivers() {
   if (locationSheet) {
     const locationData = locationSheet.getDataRange().getValues();
     for (let i = 1; i < locationData.length; i++) {
-      locationMap[String(locationData[i][0])] = { lat: locationData[i][1], lng: locationData[i][2], updated: locationData[i][3] };
+      locationMap[String(locationData[i][0]).trim()] = { lat: locationData[i][1], lng: locationData[i][2], updated: locationData[i][3] };
     }
   }
 
   const result = driverData.filter(r => r[0] !== '').map(r => ({
-    id: r[0], name: r[1], username: r[2], course: String(r[4]), phone: r[5],
-    currentLocation: locationMap[String(r[4])] || null
+    id: r[0], name: r[1], username: r[2], course: String(r[4]).trim(), phone: r[5],
+    currentLocation: locationMap[String(r[4]).trim()] || null
   }));
   const response = { success: true, data: result };
   cache.put('drivers_all', JSON.stringify(response), 5); // 5초 캐시
@@ -381,9 +381,21 @@ function updateDriverLocation(payload) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('실시간위치');
   const data = sheet.getDataRange().getValues();
   let foundRow = -1;
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === String(course)) { foundRow = i + 1; break; }
+  const targetCourse = String(course).trim();
+  
+  // 중복된 코스 데이터가 쌓여 옛날 위치에 마커가 고정되는 현상 방지
+  // 역순으로 탐색하여 첫 번째 매칭(가장 아래)만 남기고 위의 중복을 지운다.
+  for (let i = data.length - 1; i >= 1; i--) {
+    if (String(data[i][0]).trim() === targetCourse) {
+      if (foundRow === -1) {
+        foundRow = i + 1; // 가장 최신(마지막) 행을 타겟으로 잡음
+      } else {
+        sheet.deleteRow(i + 1); // 그보다 위에 있는 과거의 중복 행은 삭제
+        foundRow--; // 삭제로 인해 행 번호가 하나씩 위로 당겨짐 보정
+      }
+    }
   }
+
   if (foundRow > 0) {
     sheet.getRange(foundRow, 2, 1, 3).setValues([[lat, lng, new Date()]]);
   } else {

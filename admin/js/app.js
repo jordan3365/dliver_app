@@ -33,7 +33,8 @@ function speak(text) {
   utterance.lang = 'ko-KR';
   
   if (sysVoices.length === 0) sysVoices = window.speechSynthesis.getVoices();
-  const preferredVoices = ['Google 한국의', 'Microsoft SunHi', 'Microsoft InJoon', 'Yuna', 'Sora'];
+  // 자연스러운 구글 여성 음성을 최우선으로 매핑 (Google 한국의, ko-KR)
+  const preferredVoices = ['Google 한국의', 'ko-KR', 'Microsoft SunHi', 'Yuna', 'Sora'];
   let selectedVoice = null;
   
   for (let pref of preferredVoices) {
@@ -45,7 +46,7 @@ function speak(text) {
   if (selectedVoice) utterance.voice = selectedVoice;
   
   utterance.rate = 1.0;
-  utterance.pitch = 1.0;
+  utterance.pitch = 1.1; // 여성 음색에 맞춰 피치 살짝 조정
   window.speechSynthesis.speak(utterance);
 }
 
@@ -550,6 +551,7 @@ async function loadDashboardData(isBackground = false) {
           if (!prevDoneDestIds.has(item.id)) {
             const courseStr = item.course ? `${item.course}호차` : '배송차량';
             speak(`${courseStr} 배송처 ${item.name} 배송 완료되었습니다.`);
+            showDeliveryCompleteAlert(item.course || '-', item.name);
           }
         });
       }
@@ -657,6 +659,16 @@ function renderDashboardList(data) {
 }
 
 async function updateMapMarkers(data, drivers = []) {
+  // 기존에 열려있는 팝업 ID 상태 백업 (새로고침 시 깜빡임 방지 및 유지)
+  const openPopupIds = new Set();
+  if (typeof markers !== 'undefined') {
+    markers.forEach(m => {
+      if (m.isPopupOpen() && m.options && m.options.title) {
+        openPopupIds.add(m.options.title);
+      }
+    });
+  }
+
   const tempMarkers = [];
   const tempLivePolylines = [];
   const tempLiveCarMarkers = [];
@@ -731,7 +743,23 @@ async function updateMapMarkers(data, drivers = []) {
         tempMarkers.push(marker);
         bounds.push([lat, lng]);
 
+        let shouldOpen = false;
+
+        // 1. 새롭게 배송처가 '다음 목적지'로 지정되거나, 최초 로드 시 무조건 열기
         if (isNextDest && (isFirstLoad || newlyAddedDestIds.includes(item.id))) {
+          shouldOpen = true;
+        }
+        // 2. 이미 사용자가 수동으로 열어뒀거나 이전 주기에 열려있던 팝업 유지
+        else if (openPopupIds.has(String(item.id))) {
+          shouldOpen = true;
+        }
+
+        // 3. 완료된 목적지는 무조건 팝업 닫기 (풍선 삭제 기능)
+        if (item.status === 'done') {
+          shouldOpen = false;
+        }
+
+        if (shouldOpen) {
           setTimeout(() => marker.openPopup(), 100);
         }
       } catch (e) {
@@ -769,7 +797,7 @@ async function updateMapMarkers(data, drivers = []) {
     tempLivePolylines.push(poly);
 
     // 차량 위치 결정 (배송 완료된 곳이 있으면 완료된 최신 배송처 위치로 이동)
-    const driverInfo = drivers.find(d => String(d.course) === String(course));
+    const driverInfo = drivers.find(d => String(d.course).trim() === String(course).trim());
     let carPos = [HQ_COORD.lat, HQ_COORD.lng];
     let isLiveGps = false;
 
@@ -847,11 +875,14 @@ async function updateMapMarkers(data, drivers = []) {
     if (isActive && !isAllDone) carStatusLabel = '배송 운행 중';
     else if (isAllDone) carStatusLabel = '운행 완료 (HQ 복귀)';
 
+    const nextDestInfo = items.find(it => it.status !== 'done' && it.status !== 'excluded');
+
     carMarker.bindPopup(`
       <div style="text-align:center;">
         <h4 style="margin:0 0 5px 0; color:${color};">${course}호차</h4>
         <span class="badge" style="background:${color}; color:white; font-size:0.75rem; padding:2px 6px; border-radius:4px;">${carStatusLabel}</span><br>
         <small style="display:block; margin-top:5px;">${isLiveGps ? '실시간 GPS 연동 중' : '본사(HQ) 대기 상태'}</small>
+        ${nextDestInfo ? `<div style="margin-top:8px; padding-top:8px; border-top:1px dashed #ccc; font-weight:bold; color:#d63031;"><i class="fa-solid fa-flag-checkered"></i> 다음 목적지: ${nextDestInfo.name}</div>` : ''}
       </div>
     `);
 
@@ -1115,6 +1146,34 @@ window.toggleExclude = async function(id, isChecked) {
     alert('상태 변경 중 오류가 발생했습니다.');
   }
 };
+
+function showDeliveryCompleteAlert(course, placeName) {
+  const stack = document.getElementById('arrivalAlertStack');
+  if(!stack) return;
+
+  const courseColor = getCourseColor(course);
+  const card = document.createElement('div');
+  card.className = 'arrival-card animate-fade-in';
+  card.style.borderLeftColor = courseColor;
+  
+  card.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <strong style="color:${courseColor}; font-size:1.0rem;"><i class="fa-solid fa-circle-check"></i> ${course}호차 배송 완료</strong>
+      <button onclick="this.parentElement.parentElement.remove()" style="background:none; border:none; cursor:pointer; color:#999;"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div style="font-size:1.15rem; font-weight:800; color:var(--text-main); margin:8px 0;">${placeName}</div>
+    <div style="font-size:0.8rem; color:var(--text-muted);">실시간 배송 완료 처리됨</div>
+  `;
+  
+  stack.appendChild(card);
+  
+  // 15초 후 자동 삭제
+  setTimeout(() => {
+    if(card.parentNode) card.remove();
+  }, 15000);
+
+  updateBellBadge(1);
+}
 
 function showArrivalAlert(course, eta) {
   const stack = document.getElementById('arrivalAlertStack');

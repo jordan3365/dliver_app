@@ -112,13 +112,24 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // 초기 위치 가져오기
     try {
-      final pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-      setState(() {
-        _currentPosition = pos;
-      });
-      _reportLocation();
+      Position? pos;
+      try {
+        pos = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high,
+          timeLimit: const Duration(seconds: 5),
+        );
+      } catch (e) {
+        pos = await Geolocator.getLastKnownPosition();
+      }
+      
+      if (pos != null) {
+        if (mounted) {
+          setState(() {
+            _currentPosition = pos;
+          });
+        }
+        _reportLocation();
+      }
     } catch (_) {}
   }
 
@@ -270,16 +281,28 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!_isDelivering) return;
 
     try {
-      final pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-      setState(() {
-        _currentPosition = pos;
-      });
+      Position? pos;
+      try {
+        pos = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high,
+          timeLimit: const Duration(seconds: 5), // 무한 대기 방지용 타임아웃 추가
+        );
+      } catch (e) {
+        // 타임아웃 또는 오류 발생 시 마지막으로 알려진 위치로 폴백
+        pos = await Geolocator.getLastKnownPosition();
+      }
+
+      if (pos == null) return;
+
+      if (mounted) {
+        setState(() {
+          _currentPosition = pos;
+        });
+      }
 
       await ApiService.updateDriverLocation(
         widget.driver.course,
-        pos.latitude,
+        pos!.latitude,
         pos.longitude,
       );
 
