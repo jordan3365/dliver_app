@@ -124,9 +124,9 @@ function login(payload) {
 }
 
 function getDeliveryList(payload) {
-  // CacheService 캐싱: 동일 요청 5초 내 재호출 시 스프레드시트 I/O 생략
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'deliveryList_' + (payload && payload.course ? payload.course : 'all');
+  const targetCourse = payload && payload.course ? String(payload.course) : null;
+  const cacheKey = 'deliveryList_' + (targetCourse ? targetCourse : 'all');
   const cached = cache.get(cacheKey);
   if (cached) return JSON.parse(cached);
 
@@ -137,6 +137,8 @@ function getDeliveryList(payload) {
   let result = [];
   data.forEach(row => {
     if (!row[0]) return;
+    if (targetCourse && String(row[9]) !== targetCourse) return; // 최적화: 불필요한 행 파싱 생략
+
     let images = [];
     try {
       images = row[12] ? JSON.parse(row[12]) : [];
@@ -159,9 +161,6 @@ function getDeliveryList(payload) {
     });
   });
 
-  if (payload && payload.course) {
-    result = result.filter(r => String(r.course) === String(payload.course));
-  }
   const response = { success: true, data: result };
   cache.put(cacheKey, JSON.stringify(response), 5); // 5초 캐시
   return response;
@@ -174,8 +173,9 @@ function updateDeliveryStatus(payload) {
   for (let i = 1; i < data.length; i++) {
     if (data[i][0] == id) {
       sheet.getRange(i + 1, 12).setValue(status);
-      // 캐시 무효화
-      CacheService.getScriptCache().remove('deliveryList_all');
+      const course = data[i][9];
+      // 캐시 무효화: 전체 목록 및 해당 코스 목록 동시 무효화
+      CacheService.getScriptCache().removeAll(['deliveryList_all', 'deliveryList_' + course]);
       return { success: true };
     }
   }
@@ -189,7 +189,8 @@ function updateBoxCount(payload) {
   for (let i = 1; i < data.length; i++) {
     if (data[i][0] == id) {
       sheet.getRange(i + 1, 7).setValue(boxCount);
-      CacheService.getScriptCache().remove('deliveryList_all');
+      const course = data[i][9];
+      CacheService.getScriptCache().removeAll(['deliveryList_all', 'deliveryList_' + course]);
       return { success: true };
     }
   }
@@ -226,7 +227,17 @@ function resetAllDeliveryStatus() {
   const sheet = ss.getSheetByName('배송목록');
   const lastRow = sheet.getLastRow();
 
+  let cacheKeys = ['deliveryList_all', 'drivers_all'];
+
   if (lastRow > 1) {
+    // 고유 코스 추출하여 개별 캐시도 모두 무효화 타겟팅
+    const courseData = sheet.getRange(2, 10, lastRow - 1, 1).getValues();
+    const uniqueCourses = new Set();
+    courseData.forEach(r => {
+      if (r[0]) uniqueCourses.add('deliveryList_' + r[0]);
+    });
+    cacheKeys = cacheKeys.concat(Array.from(uniqueCourses));
+
     // 상태 컬럼(L열=12번째) 전체를 배열로 한 번에 덮어쓰기 (핵심 최적화)
     const count = lastRow - 1;
     const statusValues = Array.from({ length: count }, () => ['pending']);
@@ -240,8 +251,11 @@ function resetAllDeliveryStatus() {
 
   // 모든 배송 캐시 무효화
   const cache = CacheService.getScriptCache();
-  cache.remove('deliveryList_all');
-  cache.remove('drivers_all');
+  try {
+    cache.removeAll(cacheKeys);
+  } catch (e) {
+    cache.removeAll(['deliveryList_all', 'drivers_all']); // 예비 처리
+  }
   return { success: true, count: lastRow - 1 };
 }
 
@@ -256,10 +270,13 @@ function assignRoutes(payload) {
   
   const updateMap = {};
   routeUpdates.forEach(u => updateMap[u.id] = u);
+  const coursesToClear = new Set(['deliveryList_all']);
 
   for (let i = 0; i < data.length; i++) {
     const id = data[i][0];
     if (updateMap[id]) {
+      if (data[i][9]) coursesToClear.add('deliveryList_' + data[i][9]); // 기존 코스
+      if (updateMap[id].course) coursesToClear.add('deliveryList_' + updateMap[id].course); // 새 코스
       data[i][9] = updateMap[id].course;
       data[i][10] = updateMap[id].order;
       updated++;
@@ -271,7 +288,7 @@ function assignRoutes(payload) {
     sheet.getRange(2, 10, data.length, 2).setValues(courseOrderCol);
   }
 
-  CacheService.getScriptCache().remove('deliveryList_all');
+  CacheService.getScriptCache().removeAll(Array.from(coursesToClear));
   return { success: true, count: updated };
 }
 
@@ -315,16 +332,24 @@ function updateDeliveryPlace(payload) {
   for (let i = 1; i < data.length; i++) {
     if (data[i][0] == payload.id) {
       const rowNum = i + 1;
+      const oldCourse = data[i][9];
+      const newCourse = payload.course || '';
+
       // 여러 셀을 단일 setValues 호출로 처리 (B~K열, 9개 컬럼)
       sheet.getRange(rowNum, 2, 1, 9).setValues([[
         payload.name||'', payload.address1||'', payload.address2||'',
         payload.phone||'', payload.memo||'', payload.boxCount||1,
         payload.latitude||'', payload.longitude||'',
-        payload.course||''
+        newCourse
       ]]);
       sheet.getRange(rowNum, 11).setValue(payload.order||'');
       sheet.getRange(rowNum, 13).setValue(JSON.stringify(finalImages));
-      CacheService.getScriptCache().remove('deliveryList_all');
+      
+      const keysToClear = ['deliveryList_all'];
+      if (oldCourse) keysToClear.push('deliveryList_' + oldCourse);
+      if (newCourse) keysToClear.push('deliveryList_' + newCourse);
+      CacheService.getScriptCache().removeAll(keysToClear);
+      
       return { success: true, data: payload };
     }
   }
@@ -411,6 +436,7 @@ function addDriver(payload) {
   const data = sheet.getDataRange().getValues();
   const newId = data.length > 1 ? Math.max(...data.slice(1).map(r => Number(r[0]))) + 1 : 1;
   sheet.appendRow([newId, payload.name, payload.username, hashPassword('1111'), payload.course, payload.phone||'', new Date()]);
+  CacheService.getScriptCache().remove('drivers_all');
   return { success: true, data: { id: newId, ...payload } };
 }
 

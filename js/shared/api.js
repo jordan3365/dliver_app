@@ -2,7 +2,7 @@
 // 실제 연동 시 아래 useMock 을 false로 변경하고 GAS_WEB_APP_URL 에 URL을 넣으세요.
 // const useMock = true; 
 const useMock = false ;
-const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwxZInODKYXfQAFHPDjGIYYsUr-rzPsl7GphBOD75ZwjdUKWXK7V-rqa_zVkiS3OzD4pw/exec".trim();
+const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzgozNJ7RnT9ldJR2hs54Icc1pKWGNIOuTX1sVQkcikFe0CQUb6EGhDgYEfC4jwEIRPbw/exec".trim();
 
 let dummyDeliveryData = [];
 let dummyDrivers = [
