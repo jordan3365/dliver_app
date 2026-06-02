@@ -1321,10 +1321,6 @@
           const item = currentData.find(d => d.id === id);
           if (item) {
             item.status = 'done';
-            // 서명이 없으므로 이미지 리스트를 유지한 채 업데이트
-            let images = item.deliveryPlaceImages ? [...item.deliveryPlaceImages] : [];
-            const updatedPlace = { ...item, deliveryPlaceImages: images };
-            await api.updateDeliveryPlace(updatedPlace);
           }
           
           showToast("✅ 배송 완료 처리 성공!");

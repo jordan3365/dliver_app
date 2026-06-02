@@ -432,16 +432,12 @@ function updateDriverLocation(payload) {
   let foundRow = -1;
   const targetCourse = String(course).trim();
   
-  // 중복된 코스 데이터가 쌓여 옛날 위치에 마커가 고정되는 현상 방지
-  // 역순으로 탐색하여 첫 번째 매칭(가장 아래)만 남기고 위의 중복을 지운다.
-  for (let i = data.length - 1; i >= 1; i--) {
+  // 성능 최적화: 중복 삭제(deleteRow)와 같은 무거운 작업을 제거하고
+  // 첫 번째 발견되는 해당 차량의 행만 찾아 즉각 위도, 경도를 덮어씁니다.
+  for (let i = 1; i < data.length; i++) {
     if (String(data[i][0]).trim() === targetCourse) {
-      if (foundRow === -1) {
-        foundRow = i + 1; // 가장 최신(마지막) 행을 타겟으로 잡음
-      } else {
-        sheet.deleteRow(i + 1); // 그보다 위에 있는 과거의 중복 행은 삭제
-        foundRow--; // 삭제로 인해 행 번호가 하나씩 위로 당겨짐 보정
-      }
+      foundRow = i + 1;
+      break;
     }
   }
 
