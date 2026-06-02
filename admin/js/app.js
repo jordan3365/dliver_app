@@ -1152,7 +1152,11 @@ window.toggleExclude = async function(id, isChecked) {
   }
 };
 
+let adminSystemMessages = [];
+
 function showDeliveryCompleteAlert(course, placeName) {
+  adminSystemMessages.push({ type: 'complete', course, placeName, time: Date.now() });
+
   const stack = document.getElementById('arrivalAlertStack');
   if(!stack) return;
 
@@ -1181,6 +1185,7 @@ function showDeliveryCompleteAlert(course, placeName) {
 }
 
 function showArrivalAlert(course, eta) {
+  adminSystemMessages.push({ type: 'arrival', course, eta, time: Date.now() });
   const stack = document.getElementById('arrivalAlertStack');
   if(!stack) return;
 
@@ -1245,19 +1250,50 @@ function updateBellBadge(increment) {
   }
 }
 
-// 종 아이콘 클릭 시 알림 카운트 초기화
+// 종 아이콘 클릭 시 알림 카운트 초기화 및 모달 띄우기
 document.addEventListener('DOMContentLoaded', () => {
   const bell = document.getElementById('adminBell');
   if (bell) {
     bell.addEventListener('click', () => {
       notificationCount = 0;
       updateBellBadge(0);
-      // 알림 스택으로 시각적 효과 부여
-      const stack = document.getElementById('arrivalAlertStack');
-      if (stack && stack.firstChild) {
-        stack.firstChild.style.boxShadow = '0 0 20px var(--primary)';
-        setTimeout(() => { if(stack.firstChild) stack.firstChild.style.boxShadow = ''; }, 2000);
+      
+      const modalBody = document.getElementById('adminMessageViewerBody');
+      if (adminSystemMessages.length === 0) {
+        modalBody.innerHTML = '<div style="text-align:center; color:#999; padding:20px;">수신된 시스템 알림이 없습니다.</div>';
+      } else {
+        let html = '';
+        [...adminSystemMessages].reverse().forEach(msg => {
+          const dateObj = new Date(msg.time);
+          const timeStr = dateObj.toLocaleTimeString('ko-KR', {hour: '2-digit', minute:'2-digit'});
+          
+          if (msg.type === 'complete') {
+            html += `
+              <div style="background:#f8f9fa; border-left: 4px solid #00b894; border-radius:4px; padding:12px; margin-bottom:10px;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                  <strong style="color:#00b894; font-size:0.95rem;">${msg.course}호차 배송 완료</strong>
+                  <span style="font-size:0.8rem; color:#888;">${timeStr}</span>
+                </div>
+                <div style="font-size:0.95rem;">${msg.placeName}</div>
+              </div>
+            `;
+          } else if (msg.type === 'arrival') {
+            html += `
+              <div style="background:#fff5f5; border-left: 4px solid #ff4757; border-radius:4px; padding:12px; margin-bottom:10px;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                  <strong style="color:#ff4757; font-size:0.95rem;"><i class="fa-solid fa-triangle-exclamation"></i> ${msg.course}호차 도착 10분전</strong>
+                  <span style="font-size:0.8rem; color:#888;">${timeStr}</span>
+                </div>
+                <div style="font-size:0.95rem; color:#d63031;">ETA: ${msg.eta} - 하차 대기 바랍니다.</div>
+              </div>
+            `;
+          }
+        });
+        modalBody.innerHTML = html;
       }
+      
+      const modal = document.getElementById('adminMessageViewerModal');
+      if (modal) modal.classList.add('active');
     });
   }
 });

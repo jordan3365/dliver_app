@@ -648,6 +648,21 @@
     </div>
   </div>
 
+  <!-- 관리자 알림 메시지 확인 모달 -->
+  <div class="modal-overlay" id="adminMessageViewerModal" style="z-index: 6000;">
+    <div class="modal-container" style="width: 450px;">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-bell"></i> 수신된 알림 / 메시지</h3>
+        <button class="modal-close" onclick="document.getElementById('adminMessageViewerModal').classList.remove('active')"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body" id="adminMessageViewerBody" style="max-height: 400px; overflow-y: auto; padding: 15px;">
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary" onclick="document.getElementById('adminMessageViewerModal').classList.remove('active')" style="width: 100%;">닫기</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Excel, Postcode, Leaflet -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js"></script>

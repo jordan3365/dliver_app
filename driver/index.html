@@ -449,6 +449,18 @@
     </div>
   </div>
 
+  <!-- 알림 메시지 확인 모달 -->
+  <div class="custom-modal-overlay" id="messageViewerModal" style="z-index: 6000;">
+    <div class="custom-modal">
+      <div class="custom-modal-header"><i class="fa-solid fa-bell"></i> 수신된 메시지</div>
+      <div class="custom-modal-body" id="messageViewerBody" style="max-height: 400px; overflow-y: auto; text-align: left;">
+      </div>
+      <div class="custom-modal-footer">
+        <button class="btn-modal btn-modal-confirm" onclick="document.getElementById('messageViewerModal').classList.remove('active');">닫기</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 고객 서명 및 검증 모달 -->
   <div class="custom-modal-overlay" id="signatureModal">
     <div class="custom-modal">
@@ -996,6 +1008,8 @@
           String(n.target) === 'global' || String(n.target) === String(user.course)
         );
 
+        allDriverNotices = relevantNotices; // Save for modal
+
         for (const notice of relevantNotices) {
           const storageKey = `shownNotice_${notice.id}`;
           if (!sessionStorage.getItem(storageKey)) {
@@ -1019,6 +1033,8 @@
     }
 
     let driverNotificationCount = 0;
+    let allDriverNotices = [];
+
     function updateDriverBadge(increment) {
       const badge = document.getElementById('bellBadge');
       if (!badge) return;
@@ -1037,6 +1053,28 @@
         bell.addEventListener('click', () => {
           driverNotificationCount = 0;
           updateDriverBadge(0);
+          
+          const modalBody = document.getElementById('messageViewerBody');
+          if (allDriverNotices.length === 0) {
+            modalBody.innerHTML = '<div style="text-align:center; color:#999; padding:20px;">수신된 메시지가 없습니다.</div>';
+          } else {
+            let html = '';
+            [...allDriverNotices].reverse().forEach(n => {
+              const dateObj = new Date(n.created_at || Date.now());
+              const timeStr = dateObj.toLocaleTimeString('ko-KR', {hour: '2-digit', minute:'2-digit'});
+              html += `
+                <div style="background:#f8f9fa; border:1px solid #eee; border-radius:8px; padding:12px; margin-bottom:10px;">
+                  <div style="display:flex; justify-content:space-between; margin-bottom:8px; border-bottom:1px solid #ddd; padding-bottom:5px;">
+                    <strong style="color:var(--primary); font-size:0.9rem;">${String(n.target) === 'global' ? '전체 공지' : '개별 공지'}</strong>
+                    <span style="font-size:0.8rem; color:#888;">${timeStr}</span>
+                  </div>
+                  <div style="font-size:0.95rem; line-height:1.4;">${n.content}</div>
+                </div>
+              `;
+            });
+            modalBody.innerHTML = html;
+          }
+          document.getElementById('messageViewerModal').classList.add('active');
         });
       }
     });
