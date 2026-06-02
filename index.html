@@ -141,6 +141,7 @@
         
         // Save to local storage for persistence
         localStorage.setItem('authUser', JSON.stringify(user));
+        localStorage.removeItem('returningToHQ');
 
         // 리다이렉트 속도 최적화 (상대 경로 직접 사용)
         if (user.role === 'admin') {

@@ -16,6 +16,9 @@ let alertedArrivals = new Set(); // HQ 도착 알림이 뜬 코스 저장
 let prevNextDestIds = new Set(); // 이전 목적지 ID 저장
 let prevDoneDestIds = new Set(); // 이전 배송 완료 거래처 ID 저장용
 let currentDrivers = []; // 실시간 기사 위치 정보 저장용 추가
+let simMap; // 시뮬레이션용 독립 지도 객체
+let simMapInitialized = false;
+let simMarkers = []; // 시뮬레이션용 목적지 마커
 
 // AI TTS 음성 안내 함수 (기사앱과 동일한 프리미엄 TTS 음색 매핑 적용)
 let sysVoices = [];
@@ -250,6 +253,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderDriversView();
       } else if (item.dataset.target === 'notice') {
         renderNoticeView();
+      } else if (item.dataset.target === 'simulation') {
+        renderSimulationView();
       }
     });
   });
@@ -1186,11 +1191,11 @@ function showArrivalAlert(course, eta) {
   
   card.innerHTML = `
     <div style="display:flex; justify-content:space-between; align-items:center;">
-      <strong style="color:${courseColor}; font-size:1.1rem;"><i class="fa-solid fa-truck-ramp-box"></i> ${course}호차 도착 예정</strong>
+      <strong style="color:${courseColor}; font-size:1.1rem;"><i class="fa-solid fa-truck-ramp-box"></i> ${course}호차 도착 10분전</strong>
       <button onclick="this.parentElement.parentElement.remove()" style="background:none; border:none; cursor:pointer; color:#999;"><i class="fa-solid fa-xmark"></i></button>
     </div>
     <div style="font-size:1.8rem; font-weight:900; color:var(--primary); margin:5px 0;">${eta}</div>
-    <div style="font-size:0.85rem; color:#d63031; font-weight:600;">하역 준비 및 다음 업무 준비</div>
+    <div style="font-size:0.85rem; color:#d63031; font-weight:600;">하차 대기 바랍니다.</div>
   `;
   
   stack.appendChild(card);
@@ -1202,14 +1207,29 @@ function showArrivalAlert(course, eta) {
 
   // 브라우저 알림 (권한 있을 경우)
   if (Notification.permission === "granted") {
-    new Notification(`차량 도착 예정 - ${course}호차`, {
-      body: `${eta}경 HQ에 도착할 예정입니다.`,
+    new Notification(`HQ 도착 10분전 - ${course}호차`, {
+      body: `${course}호차 HQ 도착 10분전 하차 대기 바랍니다.`,
       icon: '../img/nav_logo.png'
     });
   }
 
   // 상단 종 아이콘 배지 업데이트
   updateBellBadge(1);
+
+  // 중앙 팝업 모달 띄우기 (네온사인 깜빡임 효과)
+  const alertModal = document.getElementById('arrivalAlertModal');
+  const alertBody = document.getElementById('arrivalAlertBody');
+  if (alertModal && alertBody) {
+    alertBody.innerHTML = `
+      <i class="fa-solid fa-triangle-exclamation" style="font-size: 4rem; color: #ff4757; margin-bottom: 15px;"></i>
+      <h1 style="font-size: 2.2rem; color: #ff4757; margin-bottom: 15px; font-weight: 900;">${course}호차 HQ 도착 10분전</h1>
+      <h2 style="font-size: 1.6rem; color: var(--text-main); margin-bottom: 0; font-weight: 700;">하차 대기 바랍니다.</h2>
+    `;
+    alertModal.classList.add('active');
+    
+    // 오디오 알림음 (선택사항)
+    speak(`${course}호차가 도착 10분 전입니다. 하차 대기 바랍니다.`);
+  }
 }
 
 let notificationCount = 0;
@@ -1392,15 +1412,56 @@ async function executeAutoRouting() {
     return;
   }
 
-  // 정렬 (경도 기준)
-  unassigned.sort((a, b) => a.longitude - b.longitude);
+  // [고도화] K-Means Clustering + TSP (VRP Engine)
+  const K = availableCourses.length;
+  let centroids = [];
   
-  // 코스 개수만큼 분할
-  const chunkSize = Math.ceil(unassigned.length / availableCourses.length);
-  
-  availableCourses.forEach((course, cIdx) => {
-    let chunk = unassigned.slice(cIdx * chunkSize, (cIdx + 1) * chunkSize);
-    chunk = sortNearest(chunk); // 해당 구역 내에서 최단거리 정렬
+  // 1. 초기 중심점 임의 선택
+  for (let i = 0; i < K; i++) {
+    const rIdx = Math.floor(Math.random() * unassigned.length);
+    centroids.push({ lat: unassigned[rIdx].latitude, lng: unassigned[rIdx].longitude });
+  }
+
+  let clusters = [];
+  let assignments = new Array(unassigned.length).fill(-1);
+  let changed = true;
+  let iter = 0;
+
+  // 2. K-Means 반복
+  while (changed && iter < 100) {
+    changed = false;
+    clusters = Array.from({length: K}, () => []);
+
+    for (let i = 0; i < unassigned.length; i++) {
+      let minDist = Infinity;
+      let clusterIdx = 0;
+      for (let k = 0; k < K; k++) {
+        const d = getDist(unassigned[i].latitude, unassigned[i].longitude, centroids[k].lat, centroids[k].lng);
+        if (d < minDist) { minDist = d; clusterIdx = k; }
+      }
+      if (assignments[i] !== clusterIdx) {
+        assignments[i] = clusterIdx;
+        changed = true;
+      }
+      clusters[clusterIdx].push(unassigned[i]);
+    }
+
+    if (changed) {
+      for (let k = 0; k < K; k++) {
+        if (clusters[k].length === 0) continue;
+        let sumLat = 0, sumLng = 0;
+        clusters[k].forEach(p => { sumLat += p.latitude; sumLng += p.longitude; });
+        centroids[k] = { lat: sumLat / clusters[k].length, lng: sumLng / clusters[k].length };
+      }
+    }
+    iter++;
+  }
+
+  // 3. TSP 정렬 및 할당
+  clusters.forEach((chunk, cIdx) => {
+    if (chunk.length === 0) return;
+    const course = availableCourses[cIdx];
+    chunk = sortNearest(chunk); // 권역 내 TSP
     chunk.forEach((item, idx) => {
       routeUpdates.push({ id: item.id, course: course, order: idx + 1 });
     });
@@ -1502,6 +1563,82 @@ async function executeManualRouting() {
     alert(`할당 중 오류 발생: ${e.message}`); 
   }
 }
+// ---------------- SIMULATION ----------------
+async function renderSimulationView() {
+  const driverSelect = document.getElementById('simCourse');
+  if (driverSelect) {
+    const drivers = currentDrivers && currentDrivers.length > 0 ? currentDrivers : await api.getDrivers();
+    driverSelect.innerHTML = '<option value="all">전체 차량</option>';
+    drivers.forEach(dr => {
+      driverSelect.innerHTML += `<option value="${dr.course}">${dr.course}코스 (${dr.name})</option>`;
+    });
+  }
+
+  if (!simMapInitialized) {
+    setTimeout(() => {
+      simMap = L.map('sim-map').setView([HQ_COORD.lat, HQ_COORD.lng], 13);
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(simMap);
+      
+      const hqIcon = L.divIcon({
+        className: 'custom-div-icon',
+        html: `<div class="map-pin"><i class="fa-solid fa-building" style="color:var(--primary); font-size:40px;"></i><span style="top:10px;">HQ</span></div>`,
+        iconSize: [40, 42],
+        iconAnchor: [20, 42]
+      });
+      L.marker([HQ_COORD.lat, HQ_COORD.lng], { icon: hqIcon }).addTo(simMap).bindPopup("착한식판 본사");
+      simMapInitialized = true;
+      drawSimMarkers();
+    }, 100);
+  } else {
+    setTimeout(() => {
+      simMap.invalidateSize();
+      drawSimMarkers();
+    }, 100);
+  }
+}
+
+function drawSimMarkers() {
+  simMarkers.forEach(m => simMap.removeLayer(m));
+  simMarkers = [];
+  
+  if(!currentData || currentData.length === 0) return;
+  
+  const bounds = L.latLngBounds();
+  bounds.extend([HQ_COORD.lat, HQ_COORD.lng]);
+
+  currentData.forEach(item => {
+    if(!item.latitude || !item.longitude) return;
+    const courseColor = getCourseColor(item.course);
+    
+    let iconHtml = `
+      <div class="map-pin">
+        <i class="fa-solid fa-location-dot" style="color: ${courseColor};"></i>
+        <span>${item.order || ''}</span>
+      </div>`;
+      
+    const customIcon = L.divIcon({
+      className: 'custom-div-icon',
+      html: iconHtml,
+      iconSize: [32, 42],
+      iconAnchor: [16, 42],
+      popupAnchor: [0, -42]
+    });
+
+    const marker = L.marker([item.latitude, item.longitude], { icon: customIcon, title: String(item.id) }).addTo(simMap);
+    marker.bindPopup(`
+      <div style="text-align:center;">
+        <h4 style="margin:0 0 5px 0;">${item.name}</h4>
+        <small>코스: ${item.course} | 순번: ${item.order || '-'}</small>
+      </div>
+    `);
+    simMarkers.push(marker);
+    bounds.extend([item.latitude, item.longitude]);
+  });
+  
+  if (simMarkers.length > 0) simMap.fitBounds(bounds, {padding: [30, 30]});
+}
 
 // OSMR API Route Simulation - 다중 차량 동시 시뮬레이션 지원
 async function runSimulation() {
@@ -1516,11 +1653,11 @@ async function runSimulation() {
   const activeSimCourses = Object.keys(simIntervals);
   Object.values(simIntervals).forEach(clearInterval);
   simIntervals = {};
-  Object.values(routePolylines).forEach(p => map.removeLayer(p));
+  Object.values(routePolylines).forEach(p => simMap.removeLayer(p));
   routePolylines = {};
-  Object.values(carMarkers).forEach(m => map.removeLayer(m));
+  Object.values(carMarkers).forEach(m => simMap.removeLayer(m));
   carMarkers = {};
-  if (window.trafficPolylines) window.trafficPolylines.forEach(p => map.removeLayer(p));
+  if (window.trafficPolylines) window.trafficPolylines.forEach(p => simMap.removeLayer(p));
   window.trafficPolylines = [];
   
   // 강제 중단된 시뮬레이션 코스 상태 복구
@@ -1584,7 +1721,7 @@ async function runSimulation() {
         });
         
         // 경로 표시 (마칭 앤츠 효과 가미)
-        const poly = L.polyline(routeCoords, {color: courseColor, weight: 5, opacity: 0.8, className: 'animated-route-line'}).addTo(map);
+        const poly = L.polyline(routeCoords, {color: courseColor, weight: 5, opacity: 0.8, className: 'animated-route-line'}).addTo(simMap);
         routePolylines[course] = poly;
 
         if (simType === 'ai_traffic') {
@@ -1595,7 +1732,7 @@ async function runSimulation() {
             let rand = Math.random();
             let color = courseColor;
             if (rand > 0.8) color = '#d63031';
-            let p = L.polyline(chunk, {color: color, weight: 8, opacity: 0.4, className: 'animated-route-line'}).addTo(map);
+            let p = L.polyline(chunk, {color: color, weight: 8, opacity: 0.4, className: 'animated-route-line'}).addTo(simMap);
             window.trafficPolylines.push(p);
           }
         }
@@ -1614,7 +1751,7 @@ async function runSimulation() {
           `,
           iconSize: [38, 38], iconAnchor: [19, 19]
         });
-        const marker = L.marker(routeCoords[0], {icon: carIcon, zIndexOffset: 1000}).addTo(map);
+        const marker = L.marker(routeCoords[0], {icon: carIcon, zIndexOffset: 1000}).addTo(simMap);
         carMarkers[course] = marker;
 
         // 애니메이션 시작
@@ -1626,15 +1763,15 @@ async function runSimulation() {
             
             // 시뮬레이션 마커 및 라인 정리
             if (routePolylines[course]) {
-              map.removeLayer(routePolylines[course]);
+              simMap.removeLayer(routePolylines[course]);
               delete routePolylines[course];
             }
             if (carMarkers[course]) {
-              map.removeLayer(carMarkers[course]);
+              simMap.removeLayer(carMarkers[course]);
               delete carMarkers[course];
             }
             if (window.trafficPolylines) {
-              window.trafficPolylines.forEach(p => map.removeLayer(p));
+              window.trafficPolylines.forEach(p => simMap.removeLayer(p));
               window.trafficPolylines = [];
             }
             
@@ -1651,7 +1788,7 @@ async function runSimulation() {
           courseItems.forEach(item => {
             const dist = getDist(routeCoords[i][0], routeCoords[i][1], item.latitude, item.longitude);
             if (dist <= 0.1) { // 100m 이내
-              const pinMarker = markers.find(m => m.options.title === String(item.id));
+              const pinMarker = simMarkers.find(m => m.options.title === String(item.id));
               if (pinMarker && !pinMarker.isPopupOpen()) {
                 pinMarker.openPopup();
               }
@@ -1674,7 +1811,7 @@ async function runSimulation() {
 
     // 전체 경로가 보이도록 줌 조정
     const allCoords = Object.values(routePolylines).flatMap(p => p.getLatLngs());
-    if(allCoords.length > 0) map.fitBounds(L.latLngBounds(allCoords), {padding: [50, 50]});
+    if(allCoords.length > 0) simMap.fitBounds(L.latLngBounds(allCoords), {padding: [50, 50]});
 
   } catch(e) {
     console.error(e);

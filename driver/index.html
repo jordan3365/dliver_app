@@ -476,10 +476,59 @@
     let currentData = [];
     let map;
     let markers = [];
-    let routePolyline = null; 
+    let routePolyline = null;
     let carMarker = null; 
     let currentUserCourse = null;
     let currentCompletingPlaceId = null;
+    // GPS 로그 전송 시 속도와 방향도 포함하기 위해 추가 변수
+    let gpsHistory = [];
+
+    // [고도화] IndexedDB 기반 오프라인 큐 초기화 (용량 제한 극복)
+    const dbName = "dliver_driver_db";
+    const storeName = "offline_queue";
+    let db;
+    const requestDB = indexedDB.open(dbName, 1);
+    requestDB.onupgradeneeded = (e) => {
+      db = e.target.result;
+      if (!db.objectStoreNames.contains(storeName)) {
+        db.createObjectStore(storeName, { keyPath: "id", autoIncrement: true });
+      }
+    };
+    requestDB.onsuccess = (e) => { db = e.target.result; };
+    requestDB.onerror = (e) => { console.error("IndexedDB 초기화 실패", e); };
+
+    function saveToIndexedDB(data) {
+      return new Promise((resolve, reject) => {
+        if (!db) return reject("DB not ready");
+        const tx = db.transaction([storeName], "readwrite");
+        const store = tx.objectStore(storeName);
+        store.add(data);
+        tx.oncomplete = () => resolve();
+        tx.onerror = (e) => reject(e);
+      });
+    }
+
+    function getAllFromIndexedDB() {
+      return new Promise((resolve, reject) => {
+        if (!db) return resolve([]);
+        const tx = db.transaction([storeName], "readonly");
+        const store = tx.objectStore(storeName);
+        const req = store.getAll();
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = (e) => reject(e);
+      });
+    }
+
+    function clearIndexedDB() {
+      return new Promise((resolve, reject) => {
+        if (!db) return resolve();
+        const tx = db.transaction([storeName], "readwrite");
+        const store = tx.objectStore(storeName);
+        store.clear();
+        tx.oncomplete = () => resolve();
+        tx.onerror = (e) => reject(e);
+      });
+    } // OSRM 실제 도로 경로 좌표 리스트 저장용
     let activeRoadPoints = []; // OSRM 실제 도로 경로 좌표 리스트 저장용
     let driverSimInterval = null; // 기사 실시간 경로 주행용 인터벌
     let driverSimIndex = 0; // 주행 인덱스
@@ -693,9 +742,6 @@
       const isDelivering = currentData.some(d => d.status === 'delivering');
       if (isDelivering) {
         startLocationTracking();
-        setTimeout(() => {
-          startDriverSimulation();
-        }, 2000);
       }
 
       // 기사앱 실시간 자동 업데이트 (5초 주기로 관리자앱 변경사항 자동 수집)
@@ -720,9 +766,7 @@
         if (distToHQ <= 0.005) {
           localStorage.removeItem('returningToHQ');
           speak('오늘 하루도 고생하셨습니다. 모든 업무를 종료 합니다.');
-          alert('오늘 하루도 고생하셨습니다. 모든 업무를 종료 합니다.');
-          localStorage.removeItem('authUser');
-          window.location.href = '../index.html';
+          showDialog('업무 종료', '본사 복귀가 확인되었습니다. 수고하셨습니다!');
           return true;
         }
       }
@@ -830,9 +874,7 @@
               driverSimInterval = null;
               localStorage.removeItem('returningToHQ');
               speak('오늘 하루도 고생하셨습니다. 모든 업무를 종료 합니다.');
-              alert('오늘 하루도 고생하셨습니다. 모든 업무를 종료 합니다.');
-              localStorage.removeItem('authUser');
-              window.location.href = '../index.html';
+              showDialog('업무 종료', '본사 복귀가 확인되었습니다. 수고하셨습니다!');
               return;
             }
           }
@@ -1250,11 +1292,13 @@
       
       const sigBase64 = ""; // 서명 없이 완료하므로 공백 서명 처리
       
-      // 오프라인 대응 모드 감지 (Robust Offline Caching)
+      // 오프라인 대응 모드 감지 (Robust Offline Caching - IndexedDB 적용)
       if (!navigator.onLine) {
-        let queue = JSON.parse(localStorage.getItem('offlineQueue') || '[]');
-        queue.push({ id: id, signature: sigBase64, timestamp: Date.now() });
-        localStorage.setItem('offlineQueue', JSON.stringify(queue));
+        await saveToIndexedDB({ 
+          deliveryId: id, 
+          signature: sigBase64, 
+          timestamp: Date.now() 
+        });
         
         // 로컬 UI 즉각 반영
         const item = currentData.find(d => d.id === id);
@@ -1320,17 +1364,16 @@
         const user = JSON.parse(userStr);
         api.sendAdminNotification(`[알림] ${user.name} 기사님 (코스 ${user.course}) 모든 배송을 완료하고 복귀합니다.`);
 
-        showDialog('고생하셨습니다!', '금일 할당된 모든 배송이 완료되었습니다. 안전하게 복귀하시기 바랍니다.', true, () => {
-          localStorage.setItem('returningToHQ', 'true');
-          window.openNavi('착한식판 본사', 37.556898, 127.206401);
-        }, '복귀');
+        localStorage.setItem('returningToHQ', 'true');
+        showToast(`모든 배송이 완료되었습니다. 자동으로 복귀 길안내를 시작합니다.`);
+        window.openNavi('착한식판 본사', 37.556898, 127.206401);
       }
     }
 
-    // [고도화] 로컬 오프라인 데이터 자동 백그라운드 서버 동기화 함수
+    // [고도화] 로컬 오프라인 데이터 자동 백그라운드 서버 동기화 함수 (IndexedDB 연동)
     async function syncOfflineQueue() {
       if (!navigator.onLine) return;
-      const queue = JSON.parse(localStorage.getItem('offlineQueue') || '[]');
+      const queue = await getAllFromIndexedDB();
       if (queue.length === 0) return;
       
       console.log(`오프라인 내역 ${queue.length}건 동기화 시작...`);
@@ -1338,9 +1381,9 @@
       
       for (const task of queue) {
         try {
-          await api.updateDeliveryStatus(task.id, 'done');
-          const item = currentData.find(d => d.id == task.id) || (await api.getDeliveryList(currentUserCourse)).find(d => d.id == task.id);
-          if (item) {
+          await api.updateDeliveryStatus(task.deliveryId, 'done');
+          const item = currentData.find(d => d.id == task.deliveryId) || (await api.getDeliveryList(currentUserCourse)).find(d => d.id == task.deliveryId);
+          if (item && task.signature) {
             let images = item.deliveryPlaceImages ? [...item.deliveryPlaceImages] : [];
             images.push(task.signature);
             const updatedPlace = { ...item, deliveryPlaceImages: images };
@@ -1351,7 +1394,7 @@
         }
       }
       
-      localStorage.removeItem('offlineQueue');
+      await clearIndexedDB();
       showToast("✅ 오프라인 배송 내역이 서버에 완벽히 동기화되었습니다!");
       speak("오프라인 배송 내역 동기화가 완료되었습니다.");
       await loadDriverData();

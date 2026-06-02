@@ -12,6 +12,15 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
   <style>
     body { display: flex; height: 100vh; overflow: hidden; background-color: var(--bg-color); }
+    @keyframes neon-blink {
+      0%, 100% { box-shadow: 0 0 10px #ff4757, 0 0 20px #ff4757, 0 0 30px #ff4757; border-color: #ff4757; }
+      50% { box-shadow: 0 0 20px #ff4757, 0 0 40px #ff4757, 0 0 60px #ff4757; border-color: #ffcccc; transform: scale(1.02); }
+    }
+    .traffic-blink-neon {
+      animation: neon-blink 0.8s ease-in-out infinite alternate !important;
+      background-color: rgba(255, 71, 87, 0.15) !important;
+      border: 3px solid #ff4757 !important;
+    }
     /* Sidebar */
     .sidebar { width: 260px; background: #fff; border-right: 1px solid var(--border-color); display: flex; flex-direction: column; z-index: 1000; }
     .sidebar-header { padding: 24px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border-color); }
@@ -308,6 +317,7 @@
     </div>
     <div class="nav-menu" id="navMenu">
       <a class="nav-item active" data-target="dashboard"><i class="fa-solid fa-chart-line"></i> 대시보드</a>
+      <a class="nav-item" data-target="simulation"><i class="fa-solid fa-truck-fast"></i> 배송시뮬레이션</a>
       <a class="nav-item" data-target="routing"><i class="fa-solid fa-map-location-dot"></i> 경로 자동할당</a>
       <a class="nav-item" data-target="notice"><i class="fa-solid fa-bullhorn"></i> 공지사항 관리</a>
       <a class="nav-item" data-target="clients"><i class="fa-solid fa-users"></i> 거래처 관리</a>
@@ -366,20 +376,28 @@
             <div id="vehicleStatus">로딩중...</div>
             <div id="etaInfo" style="margin-top:10px; font-size:0.85rem; color:var(--primary); font-weight:bold;"></div>
           </div>
-          <!-- Simulation Controls -->
-          <div class="sim-overlay">
-            <span style="font-size:0.9rem; font-weight:600;"><i class="fa-solid fa-route"></i> 시뮬레이션:</span>
-            <select id="simCourse" class="form-control" style="width:auto; padding:6px; font-size:0.85rem;">
-              <option value="all">전체 차량</option>
-              <option value="1">1호차</option>
-              <option value="2">2호차</option>
-            </select>
-            <select id="simType" class="form-control" style="width:auto; padding:6px; font-size:0.85rem; font-weight:600;">
-              <option value="order">지정된 배송순번 기준</option>
-              <option value="ai_traffic">AI 실시간 교통상황 반영</option>
-            </select>
-            <button class="btn-primary" id="startSimBtn" style="padding: 6px 12px; font-size: 0.85rem;">실행</button>
-          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 배송 시뮬레이션 뷰 -->
+    <section id="view-simulation" class="view-section">
+      <div class="card map-container" style="height: 100%;">
+        <div class="card-header">
+          <h4 class="card-title">가상 배송 주행 시뮬레이션</h4>
+        </div>
+        <div id="sim-map" style="flex:1; width:100%; min-height:500px;"></div>
+        <div class="sim-overlay" style="bottom: 20px; left: 20px;">
+          <span style="font-size:0.9rem; font-weight:600;"><i class="fa-solid fa-route"></i> 대상:</span>
+          <select id="simCourse" class="form-control" style="width:auto; padding:6px; font-size:0.85rem;">
+            <option value="all">전체 차량</option>
+            <!-- 자바스크립트에서 기사 목록 동적 로드 -->
+          </select>
+          <select id="simType" class="form-control" style="width:auto; padding:6px; font-size:0.85rem; font-weight:600;">
+            <option value="order">지정된 배송순번 기준</option>
+            <option value="ai_traffic">AI 실시간 교통상황 반영</option>
+          </select>
+          <button class="btn-primary" id="startSimBtn" style="padding: 6px 12px; font-size: 0.85rem;">시뮬레이션 시작</button>
         </div>
       </div>
     </section>
@@ -602,16 +620,16 @@
 
   <!-- HQ 도착 예정 알림 모달 -->
   <div class="modal-overlay" id="arrivalAlertModal" style="z-index: 5000;">
-    <div class="modal-container traffic-blink" style="width: 450px;">
-      <div class="modal-header" style="color: white;">
-        <h3 id="arrivalAlertTitle"><i class="fa-solid fa-truck-ramp-box"></i> 차량 HQ 도착 예정</h3>
-        <button class="modal-close" id="closeArrivalAlertModal" style="color:white;"><i class="fa-solid fa-xmark"></i></button>
+    <div class="modal-container traffic-blink-neon" style="width: 500px; border-radius: 12px; overflow: hidden;">
+      <div class="modal-header" style="background: #ff4757; color: white; border-bottom: none;">
+        <h3 id="arrivalAlertTitle" style="font-size: 1.4rem; margin:0;"><i class="fa-solid fa-truck-ramp-box"></i> 하차 대기 알림</h3>
+        <button class="modal-close" id="closeArrivalAlertModal" onclick="document.getElementById('arrivalAlertModal').classList.remove('active')" style="color:white; font-size:1.5rem;"><i class="fa-solid fa-xmark"></i></button>
       </div>
       <div class="modal-body" id="arrivalAlertBody" style="text-align: center; padding: 30px 20px;">
         <!-- 내용 동적 생성 -->
       </div>
       <div class="modal-footer">
-        <button class="btn-primary" id="confirmArrivalAlert" style="width:100%;">확인</button>
+        <button class="btn-primary" id="confirmArrivalAlert" onclick="document.getElementById('arrivalAlertModal').classList.remove('active')" style="width:100%; background: #ff4757;">확인 (하차장 대기)</button>
       </div>
     </div>
   </div>

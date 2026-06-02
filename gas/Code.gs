@@ -54,10 +54,25 @@ function setupSheets() {
     sheet4.getRange("A1:D1").setFontWeight("bold").setBackground("#0984e3").setFontColor("white");
     sheet4.setFrozenRows(1);
   }
+
+  let sheet5 = ss.getSheetByName('배송ETD');
+  if (!sheet5) sheet5 = ss.insertSheet('배송ETD');
+  if (sheet5.getLastRow() === 0) {
+    sheet5.appendRow(['날짜', '보고서내용', '생성시간']);
+    sheet5.getRange("A1:C1").setFontWeight("bold").setBackground("#6c5ce7").setFontColor("white");
+    sheet5.setFrozenRows(1);
+  }
+  let sheet6 = ss.getSheetByName('gps_logs');
+  if (!sheet6) sheet6 = ss.insertSheet('gps_logs');
+  if (sheet6.getLastRow() === 0) {
+    sheet6.appendRow(['id','driver_id','course_id','order_id','lat','lng','speed','heading','accuracy','battery','status','created_at']);
+    sheet6.getRange("A1:L1").setFontWeight("bold").setBackground("#e17055").setFontColor("white");
+    sheet6.setFrozenRows(1);
+  }
 }
 
 // 읽기 전용 액션 목록 (락 불필요, CacheService 적용 대상)
-const READ_ACTIONS = new Set(['getDeliveryList','getDrivers','getNotices','login']);
+const READ_ACTIONS = new Set(['getDeliveryList','getDrivers','getNotices','login', 'getEtdReports', 'getGpsLogs']);
 
 function doPost(e) {
   try {
@@ -72,6 +87,8 @@ function doPost(e) {
       else if (action === 'getDeliveryList') result = getDeliveryList(data);
       else if (action === 'getDrivers') result = getDrivers();
       else if (action === 'getNotices') result = getNotices();
+      else if (action === 'getEtdReports') result = getEtdReports();
+      else if (action === 'getGpsLogs') result = getGpsLogs(data);
       return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
     }
 
@@ -92,6 +109,8 @@ function doPost(e) {
       else if (action === 'deleteNotice') result = deleteNotice(data);
       else if (action === 'updateDriverLocation') result = updateDriverLocation(data);
       else if (action === 'updateBoxCount') result = updateBoxCount(data);
+      else if (action === 'saveGpsLog') result = saveGpsLog(data);
+      else if (action === 'generateEtdReport') result = generateEtdReport();
       else throw new Error('알 수 없는 Action: ' + action);
       return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
     } finally {
@@ -157,7 +176,7 @@ function getDeliveryList(payload) {
       latitude: rawLat, longitude: rawLng,
       course: row[9] ? String(row[9]) : null,
       order: row[10] || null, status: row[11] || 'pending',
-      deliveryPlaceImages: images
+      deliveryPlaceImages: images, arrivalTime: row[13] || null
     });
   });
 
@@ -173,6 +192,11 @@ function updateDeliveryStatus(payload) {
   for (let i = 1; i < data.length; i++) {
     if (data[i][0] == id) {
       sheet.getRange(i + 1, 12).setValue(status);
+      if (status === 'done') {
+        sheet.getRange(i + 1, 14).setValue(new Date().toISOString()); // 도착시간 기록
+      } else if (status === 'pending') {
+        sheet.getRange(i + 1, 14).setValue(''); // 취소시 초기화
+      }
       const course = data[i][9];
       // 캐시 무효화: 전체 목록 및 해당 코스 목록 동시 무효화
       CacheService.getScriptCache().removeAll(['deliveryList_all', 'deliveryList_' + course]);
@@ -431,6 +455,47 @@ function updateDriverLocation(payload) {
   return { success: true };
 }
 
+function saveGpsLog(payload) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+    const { driver_id, course_id, order_id, lat, lng, speed, heading, accuracy, battery, status } = payload;
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('gps_logs');
+    const id = new Date().getTime(); // timestamp as ID
+    sheet.appendRow([id, driver_id, course_id, order_id, lat, lng, speed, heading, accuracy, battery, status, new Date().toISOString()]);
+    
+    // 동시에 실시간 위치 테이블도 업데이트 (기존 로직 호환 유지)
+    updateDriverLocation({ course: course_id, lat, lng });
+  } catch(e) {
+    console.error("GPS 로깅 락 획득 실패:", e);
+  } finally {
+    lock.releaseLock();
+  }
+  return { success: true };
+}
+
+function getGpsLogs(payload) {
+  const { date, course_id } = payload; // date format: YYYY-MM-DD
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('gps_logs');
+  if (!sheet) return { success: true, data: [] };
+  const data = sheet.getDataRange().getValues();
+  data.shift(); // 헤더 제외
+  
+  const result = [];
+  data.forEach(r => {
+    if (String(r[2]) !== String(course_id)) return;
+    const logDate = r[11] ? new Date(r[11]).toISOString().split('T')[0] : '';
+    if (logDate === date) {
+      result.push({
+        id: r[0], driver_id: r[1], course_id: r[2], order_id: r[3],
+        lat: r[4], lng: r[5], speed: r[6], heading: r[7],
+        accuracy: r[8], battery: r[9], status: r[10], created_at: r[11]
+      });
+    }
+  });
+  return { success: true, data: result };
+}
+
 function addDriver(payload) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('기사목록');
   const data = sheet.getDataRange().getValues();
@@ -480,4 +545,155 @@ function deleteNotice(payload) {
   }
   CacheService.getScriptCache().remove('notices_all');
   return { success: true };
+}
+
+function getEtdReports() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('배송ETD');
+  if (!sheet) return { success: true, data: [] };
+  const data = sheet.getDataRange().getValues();
+  data.shift(); // 헤더 제외
+  const result = data.map(r => ({ date: r[0], report: r[1], createdAt: r[2] })).reverse();
+  return { success: true, data: result };
+}
+
+function generateEtdReport() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('배송목록');
+  const data = sheet.getDataRange().getValues();
+  data.shift();
+  
+  const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+  let totalDest = 0;
+  let totalDone = 0;
+  let driverStats = {};
+
+  data.forEach(row => {
+    if (!row[0] || !row[9] || row[11] === 'excluded') return;
+    const course = String(row[9]);
+    const status = row[11];
+    const arrivalTimeStr = row[13];
+    
+    if (!driverStats[course]) driverStats[course] = { total: 0, done: 0, arrivals: [] };
+    
+    driverStats[course].total++;
+    totalDest++;
+    
+    if (status === 'done') {
+      driverStats[course].done++;
+      totalDone++;
+      if (arrivalTimeStr) {
+        driverStats[course].arrivals.push(new Date(arrivalTimeStr).getTime());
+      }
+    }
+  });
+
+  // GPS 로그를 분석하여 공회전(Idling) 및 정체 시간 계산
+  const gpsSheet = ss.getSheetByName('gps_logs');
+  if (gpsSheet && gpsSheet.getLastRow() > 1) {
+    const gpsData = gpsSheet.getDataRange().getValues();
+    gpsData.shift();
+    
+    // speed < 1 인 로그 개수 집계 (1로그당 약 10초)
+    gpsData.forEach(row => {
+      const logDate = row[11] ? new Date(row[11]) : null;
+      if (logDate && Utilities.formatDate(logDate, Session.getScriptTimeZone(), "yyyy-MM-dd") === today) {
+        const dCourse = String(row[2]);
+        const speed = parseFloat(row[6]) || 0;
+        if (driverStats[dCourse]) {
+          if (!driverStats[dCourse].idleCount) driverStats[dCourse].idleCount = 0;
+          if (speed < 1) driverStats[dCourse].idleCount++;
+        }
+      }
+    });
+  }
+
+  let reportText = `🤖 [AI 배송 ETD 분석 리포트 - ${today}]\n\n`;
+  reportText += `📊 전체 요약\n`;
+  reportText += `- 총 배송처: ${totalDest}곳\n`;
+  reportText += `- 완료 배송처: ${totalDone}곳 (진행률: ${totalDest > 0 ? Math.round((totalDone/totalDest)*100) : 0}%)\n\n`;
+  
+  reportText += `🚚 차량별 배송 현황 및 ETD 분석:\n`;
+  
+  let bestDriver = "";
+  let bestTime = Infinity;
+
+  Object.keys(driverStats).forEach(course => {
+    const stat = driverStats[course];
+    reportText += `\n[${course}호차]\n- 완료 현황: ${stat.done}/${stat.total}건\n`;
+    
+    if (stat.arrivals.length >= 2) {
+      stat.arrivals.sort();
+      let totalDiff = 0;
+      for (let i = 1; i < stat.arrivals.length; i++) {
+        totalDiff += (stat.arrivals[i] - stat.arrivals[i-1]);
+      }
+      const avgMs = totalDiff / (stat.arrivals.length - 1);
+      const avgMins = Math.round(avgMs / 60000);
+      reportText += `- 평균 목적지 간 이동/배송 시간: 약 ${avgMins}분\n`;
+      
+      if (avgMins < bestTime) {
+        bestTime = avgMins;
+        bestDriver = course;
+      }
+      
+      if (avgMins > 20) {
+        reportText += `⚠️ 평균 배송 시간이 20분을 초과했습니다. 교통 정체 또는 배송지 대기가 원인일 수 있습니다.\n`;
+      } else if (avgMins <= 10) {
+        reportText += `⚡ 매우 신속한 배송이 이루어지고 있습니다!\n`;
+      }
+    } else if (stat.arrivals.length === 1) {
+      reportText += `- 배송 시작 단계입니다.\n`;
+    } else {
+      reportText += `- 아직 배송 완료된 데이터가 없습니다.\n`;
+    }
+    
+    // 공회전/휴게 시간 텔레매틱스 분석 기록
+    if (stat.idleCount && stat.idleCount > 0) {
+      const idleMinutes = Math.round(stat.idleCount * 10 / 60); // 10초 주기
+      if (idleMinutes > 15) {
+        reportText += `⚠️ 텔레매틱스 분석: 차량 정차(유휴/휴게/정체) 시간이 총 ${idleMinutes}분 감지되었습니다.\n`;
+      }
+    }
+  });
+
+  reportText += `\n💡 AI 인사이트:\n`;
+  if (bestDriver !== "") {
+    reportText += `오늘 가장 배송 효율(목적지 간 최단시간)이 좋은 차량은 **${bestDriver}호차**(평균 ${bestTime}분)입니다.\n`;
+  }
+  if (totalDone === totalDest && totalDest > 0) {
+    reportText += `모든 배송이 성공적으로 완료되었습니다! 수고하셨습니다.`;
+  } else if (totalDone < totalDest) {
+    reportText += `아직 미완료된 배송처가 남아 있습니다. 끝까지 안전 운행 부탁드립니다.`;
+  } else {
+    reportText += `금일 등록된 배송 일정이 없습니다.`;
+  }
+
+  let etdSheet = ss.getSheetByName('배송ETD');
+  if (!etdSheet) {
+    etdSheet = ss.insertSheet('배송ETD');
+    etdSheet.appendRow(['날짜', '보고서내용', '생성시간']);
+    etdSheet.getRange("A1:C1").setFontWeight("bold").setBackground("#6c5ce7").setFontColor("white");
+    etdSheet.setFrozenRows(1);
+  }
+  
+  const etdData = etdSheet.getDataRange().getValues();
+  let found = false;
+  for (let i = 1; i < etdData.length; i++) {
+    let rowDate = etdData[i][0];
+    if (rowDate instanceof Date) {
+      rowDate = Utilities.formatDate(rowDate, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    }
+    if (String(rowDate) === today) {
+      etdSheet.getRange(i + 1, 2).setValue(reportText);
+      etdSheet.getRange(i + 1, 3).setValue(new Date().toISOString());
+      found = true;
+      break;
+    }
+  }
+  
+  if (!found) {
+    etdSheet.appendRow([today, reportText, new Date().toISOString()]);
+  }
+  
+  return { success: true, data: reportText };
 }
