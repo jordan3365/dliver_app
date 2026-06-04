@@ -20,6 +20,7 @@ let simMap; // 시뮬레이션용 독립 지도 객체
 let simMapInitialized = false;
 let simMarkers = []; // 시뮬레이션용 목적지 마커
 let predictedCarState = {}; // 상태 기반 예측 이동 로직을 위한 글로벌 객체
+let hqArrivedCourses = new Set(); // 본사 도착 완료 처리된 코스 저장용
 
 // AI TTS 음성 안내 함수 (기사앱과 동일한 프리미엄 TTS 음색 매핑 적용)
 let sysVoices = [];
@@ -50,7 +51,7 @@ function speak(text) {
   if (selectedVoice) utterance.voice = selectedVoice;
   
   utterance.rate = 1.0;
-  utterance.pitch = 1.1; // 여성 음색에 맞춰 피치 살짝 조정
+  utterance.pitch = 1.0; // 가장 자연스러운 기본(1.0) 피치 적용 (구글 네이티브 음성에 최적화)
   window.speechSynthesis.speak(utterance);
 }
 
@@ -851,6 +852,8 @@ async function updateMapMarkers(data, drivers = []) {
 
     // 다음 배송처로 천천히 3%씩 이동 (상태 기반 시뮬레이션 내비게이션 효과)
     if (isActive && pendingItems.length > 0) {
+      hqArrivedCourses.delete(course); // 배송 중이면 도착 상태 해제
+      
       const nextDest = pendingItems[0];
       const destLat = parseFloat(nextDest.latitude);
       const destLng = parseFloat(nextDest.longitude);
@@ -861,8 +864,8 @@ async function updateMapMarkers(data, drivers = []) {
         const distLat = destLat - curLat;
         const distLng = destLng - curLng;
         
-        // 너무 가까워지면(약 50m 이내) 더 이상 이동하지 않고 해당 위치에서 배송 완료 대기
-        if (Math.abs(distLat) > 0.0005 || Math.abs(distLng) > 0.0005) {
+        // 너무 가까워지면(약 100m 이내) 더 이상 이동하지 않고 해당 위치에서 배송 완료 대기
+        if (Math.abs(distLat) > 0.001 || Math.abs(distLng) > 0.001) {
           predictedCarState[course].pos = [curLat + distLat * 0.04, curLng + distLng * 0.04];
         }
       }
@@ -872,8 +875,17 @@ async function updateMapMarkers(data, drivers = []) {
       const curLng = predictedCarState[course].pos[1];
       const distLat = HQ_COORD.lat - curLat;
       const distLng = HQ_COORD.lng - curLng;
-      if (Math.abs(distLat) > 0.0005 || Math.abs(distLng) > 0.0005) {
+      if (Math.abs(distLat) > 0.001 || Math.abs(distLng) > 0.001) {
         predictedCarState[course].pos = [curLat + distLat * 0.04, curLng + distLng * 0.04];
+      } else {
+        // 본사(HQ)에 완전히 도착한 경우
+        isLiveGps = false; // LIVE 배지 자동 종료
+        predictedCarState[course].pos = [HQ_COORD.lat, HQ_COORD.lng]; // 완전히 본사에 스냅
+        if (!hqArrivedCourses.has(course)) {
+          hqArrivedCourses.add(course);
+          speak(`${course}호차가 본사에 도착하여 실시간 관제를 종료합니다.`);
+          showToast(`${course}호차 본사 도착 완료 (관제 종료)`);
+        }
       }
     }
 
@@ -975,7 +987,20 @@ async function updateMapMarkers(data, drivers = []) {
     let carMarker = liveCarMarkers.find(m => m.options.courseId === course);
     if (carMarker) {
       carMarker.setLatLng(carPos);
-      // setIcon 호출 시 DOM이 재생성되어 CSS 부드러운 이동(transition) 애니메이션이 끊기는 문제 해결을 위해 생략
+      
+      // CSS transition을 유지하기 위해 setIcon을 호출하지 않고, 뱃지만 DOM에서 직접 조작합니다.
+      const el = carMarker.getElement();
+      if (el) {
+        const badge = el.querySelector('.live-badge');
+        if (isLiveGps) {
+          if (!badge) {
+            const container = el.querySelector('.car-marker-container');
+            if (container) container.insertAdjacentHTML('beforeend', '<span class="live-badge" style="top: -12px; right: -12px; background: #2ecc71; color: white; padding: 2px 5px; font-size: 9px; font-weight: bold; border-radius: 4px; position: absolute; box-shadow: 0 0 5px rgba(0,0,0,0.2);">LIVE</span>');
+          }
+        } else {
+          if (badge) badge.remove();
+        }
+      }
     } else {
       carMarker = L.marker(carPos, {icon: carIcon, zIndexOffset: 500, courseId: course});
     }
@@ -1003,11 +1028,11 @@ async function updateMapMarkers(data, drivers = []) {
 
     tempLiveCarMarkers.push(carMarker);
 
-    // 근접 알림 체크 (다음 목적지 100m 이내 접근 시 팝업 자동 오픈)
+    // 근접 알림 체크 (다음 목적지 30m 이내 접근 시 팝업 자동 오픈)
     const nextDest = items.find(it => it.status !== 'done');
     if (nextDest) {
       const dist = getDist(carPos[0], carPos[1], nextDest.latitude, nextDest.longitude);
-      if (dist <= 0.1) { // 100m 이내
+      if (dist <= 0.03) { // 30m 이내 (0.03km)
         const marker = tempMarkers.find(m => m.options.title === String(nextDest.id));
         if (marker && !marker.isPopupOpen()) {
           marker.openPopup();
