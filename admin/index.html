@@ -218,6 +218,7 @@
       align-items: center;
       background: transparent !important;
       border: none !important;
+      transition: transform 3.0s linear !important; /* 부드러운 위치 이동 애니메이션 */
     }
     .live-vehicle-marker .car-marker-container {
       position: relative;
@@ -249,6 +250,19 @@
     @keyframes vehiclePulse {
       0% { transform: scale(0.9); opacity: 0.9; }
       100% { transform: scale(1.4); opacity: 0; }
+    }
+
+    /* ETA 툴팁 스타일 */
+    .leaflet-tooltip-eta {
+      background-color: rgba(255, 255, 255, 0.95);
+      border: 1px solid rgba(0, 0, 0, 0.1);
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      border-radius: 8px;
+      padding: 4px 8px;
+      margin-bottom: 2px;
+    }
+    .leaflet-tooltip-eta::before {
+      display: none; /* 말풍선 화살표 꼬리 제거 */
     }
 
     /* Responsive Adjustments & Collapsible UI */

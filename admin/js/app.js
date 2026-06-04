@@ -19,6 +19,7 @@ let currentDrivers = []; // 실시간 기사 위치 정보 저장용 추가
 let simMap; // 시뮬레이션용 독립 지도 객체
 let simMapInitialized = false;
 let simMarkers = []; // 시뮬레이션용 목적지 마커
+let predictedCarState = {}; // 상태 기반 예측 이동 로직을 위한 글로벌 객체
 
 // AI TTS 음성 안내 함수 (기사앱과 동일한 프리미엄 TTS 음색 매핑 적용)
 let sysVoices = [];
@@ -31,7 +32,7 @@ if (window.speechSynthesis) {
 
 function speak(text) {
   if (!window.speechSynthesis) return;
-  window.speechSynthesis.cancel(); 
+  // window.speechSynthesis.cancel(); // 다중 알림 시 서로 취소되는 버그 방지를 위해 큐에 쌓이도록 주석 처리
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = 'ko-KR';
   
@@ -99,19 +100,21 @@ function getDirectImageUrl(url) {
 
 // OSRM을 이용한 실제 도로 경로 좌표 획득 함수
 async function getRoadPath(points) {
-  if (points.length < 2) return points;
+  if (points.length < 2) return { roadPoints: points, legDurations: [] };
   try {
     const coords = points.map(p => `${p[1]},${p[0]}`).join(';');
     const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
     const res = await fetch(url);
     const data = await res.json();
     if (data.code === 'Ok') {
-      return data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+      const roadPoints = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+      const legDurations = data.routes[0].legs.map(leg => leg.duration);
+      return { roadPoints, legDurations };
     }
   } catch (e) {
     console.error('OSRM 호출 실패:', e);
   }
-  return points; // 실패 시 직선 경로 반환
+  return { roadPoints: points, legDurations: points.map(() => 0) }; // 실패 시 직선 경로 및 0초 반환
 }
 
 function hexToRgba(hex, alpha) {
@@ -501,14 +504,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     await loadDashboardData();
 
-    // 실시간 자동 갱신 (7초 → GAS 서버 부하 완화 및 캐시 효율 극대화)
+    // 실시간 자동 갱신 (3초 → 매우 빠른 갱신)
     setInterval(async () => {
       try {
         await loadDashboardData(true); // true = 백그라운드 폴링 플래그
       } catch (err) {
         console.warn("실시간 데이터 자동 갱신 대기 중...", err);
       }
-    }, 7000);
+    }, 3000);
   } catch (err) {
     console.error("App initialization failed:", err);
     const errorMsg = `
@@ -559,6 +562,18 @@ async function loadDashboardData(isBackground = false) {
             const courseStr = item.course ? `${item.course}호차` : '배송차량';
             speak(`${courseStr} 배송처 ${item.name} 배송 완료되었습니다.`);
             showDeliveryCompleteAlert(item.course || '-', item.name);
+            
+            // 새롭게 완료된 배송처 위치로 부드럽게 줌인(Zoom-in) 비주얼 효과 적용
+            if (item.latitude && item.longitude) {
+              const lat = parseFloat(item.latitude);
+              const lng = parseFloat(item.longitude);
+              if (!isNaN(lat) && !isNaN(lng) && map) {
+                map.flyTo([lat, lng], 17, {
+                  animate: true,
+                  duration: 2.5
+                });
+              }
+            }
           }
         });
       }
@@ -779,31 +794,8 @@ async function updateMapMarkers(data, drivers = []) {
   const courseKeys = Object.keys(coursePaths);
   const roadPathPromises = courseKeys.map(async (course) => {
     const items = coursePaths[course].sort((a,b) => (a.order || 999) - (b.order || 999));
-    const rawPoints = [[HQ_COORD.lat, HQ_COORD.lng]];
-    items.forEach(it => {
-      if (it.latitude && it.longitude) {
-        rawPoints.push([parseFloat(it.latitude), parseFloat(it.longitude)]);
-      }
-    });
     
-    try {
-      const roadPoints = await getRoadPath(rawPoints);
-      return { course, items, roadPoints };
-    } catch (e) {
-      console.error(`${course}호차 경로 로딩 실패:`, e);
-      return { course, items, roadPoints: rawPoints };
-    }
-  });
-
-  const roadPathsResults = await Promise.all(roadPathPromises);
-
-  roadPathsResults.forEach(({ course, items, roadPoints }) => {
-    const color = getCourseColor(course);
-    // 진한 실선으로 표시 (흐르는 듯한 마칭 앤츠 애니메이션 가미)
-    const poly = L.polyline(roadPoints, {color: color, weight: 6, opacity: 0.8, className: 'animated-route-line'});
-    tempLivePolylines.push(poly);
-
-    // 차량 위치 결정 (배송 완료된 곳이 있으면 완료된 최신 배송처 위치로 이동)
+    // 1. 차량 위치 우선 계산 (실시간 GPS -> 최근 완료지 -> HQ)
     const driverInfo = drivers.find(d => String(d.course).trim() === String(course).trim());
     let carPos = [HQ_COORD.lat, HQ_COORD.lng];
     let isLiveGps = false;
@@ -811,7 +803,6 @@ async function updateMapMarkers(data, drivers = []) {
     const isActive = items.some(it => it.status === 'delivering' || it.status === 'done');
     const isAllDone = items.length > 0 && items.every(it => it.status === 'done');
 
-    // 1. 최우선: 기사의 실시간 GPS 위치가 수집된 경우
     if (driverInfo && driverInfo.currentLocation) {
       const latGps = parseFloat(driverInfo.currentLocation.lat);
       const lngGps = parseFloat(driverInfo.currentLocation.lng);
@@ -820,44 +811,149 @@ async function updateMapMarkers(data, drivers = []) {
       const timeStr = driverInfo.currentLocation.updated || driverInfo.currentLocation.timestamp;
       if (timeStr) {
         const gpsTime = new Date(timeStr).getTime();
-        if (!isNaN(gpsTime)) {
-          const now = new Date().getTime();
-          // 30분 이상 지난 GPS 데이터는 오래된 데이터로 간주하여 무시
-          if (now - gpsTime > 30 * 60 * 1000) {
-            isRecent = false;
-          }
-        } else {
-          isRecent = false; // 파싱 실패
+        // 12시간 지나면 GPS 만료 (30분은 점심시간 등 휴식 시 마커 튀는 버그 유발)
+        if (!isNaN(gpsTime) && Math.abs(new Date().getTime() - gpsTime) > 12 * 60 * 60 * 1000) {
+          isRecent = false;
         }
-      } else {
-        isRecent = false; // 시간 정보 없음
-      }
+      } else { isRecent = false; }
 
       if (isRecent && !isNaN(latGps) && !isNaN(lngGps) && latGps !== 0 && lngGps !== 0) {
-        carPos = [latGps, lngGps];
+        // 사용자의 요청에 따라 실제 GPS보다 '최근 배송처 -> 다음 배송처' 상태 기반 예측 이동을 우선 적용하기 위해, 
+        // GPS 위치를 바로 carPos로 덮어쓰지 않고 로직을 하단 예측 로직으로 일원화합니다.
+        // isLiveGps 플래그만 남겨둡니다.
         isLiveGps = true;
       }
     }
 
-    // 2. 실시간 GPS가 없다면 차선책 (가장 최근 완료된 배송지 위치)
-    if (!isLiveGps) {
-      if (isActive) {
-        const doneItems = items.filter(it => it.status === 'done').sort((a, b) => (a.order || 0) - (b.order || 0));
-        if (doneItems.length > 0) {
-          const lastDone = doneItems[doneItems.length - 1];
-          const latVal = parseFloat(lastDone.latitude);
-          const lngVal = parseFloat(lastDone.longitude);
-          if (!isNaN(latVal) && !isNaN(lngVal)) {
-            carPos = [latVal, lngVal];
-          }
+    const doneItems = items.filter(it => it.status === 'done').sort((a, b) => (a.order || 0) - (b.order || 0));
+    const pendingItems = items.filter(it => it.status !== 'done' && it.status !== 'excluded');
+    
+    let basePos = [HQ_COORD.lat, HQ_COORD.lng];
+    let lastDoneId = null;
+    
+    if (doneItems.length > 0) {
+      const lastDone = doneItems[doneItems.length - 1];
+      lastDoneId = lastDone.id;
+      const latVal = parseFloat(lastDone.latitude);
+      const lngVal = parseFloat(lastDone.longitude);
+      if (!isNaN(latVal) && !isNaN(lngVal)) basePos = [latVal, lngVal];
+    } else if (!isActive) {
+      const courseNum = parseInt(course) || Math.floor(Math.random() * 10);
+      const angle = courseNum * (Math.PI * 2 / 10); 
+      const radius = 0.00025; 
+      basePos = [HQ_COORD.lat + Math.cos(angle) * radius, HQ_COORD.lng + Math.sin(angle) * radius];
+    }
+
+    // 예측 이동 상태 초기화 또는 갱신 (새로운 목적지 완료 감지 시 위치를 즉시 동기화)
+    if (!predictedCarState[course] || predictedCarState[course].lastDoneId !== lastDoneId) {
+      predictedCarState[course] = { pos: [...basePos], lastDoneId: lastDoneId };
+    }
+
+    // 다음 배송처로 천천히 3%씩 이동 (상태 기반 시뮬레이션 내비게이션 효과)
+    if (isActive && pendingItems.length > 0) {
+      const nextDest = pendingItems[0];
+      const destLat = parseFloat(nextDest.latitude);
+      const destLng = parseFloat(nextDest.longitude);
+      if (!isNaN(destLat) && !isNaN(destLng)) {
+        const curLat = predictedCarState[course].pos[0];
+        const curLng = predictedCarState[course].pos[1];
+        
+        const distLat = destLat - curLat;
+        const distLng = destLng - curLng;
+        
+        // 너무 가까워지면(약 50m 이내) 더 이상 이동하지 않고 해당 위치에서 배송 완료 대기
+        if (Math.abs(distLat) > 0.0005 || Math.abs(distLng) > 0.0005) {
+          predictedCarState[course].pos = [curLat + distLat * 0.04, curLng + distLng * 0.04];
         }
-      } else {
-        // 운행 전(전체 초기화 상태 등) HQ 대기: 마커가 완벽히 겹쳐서 안 보이는 현상 방지 (방사형 오프셋 배치)
-        const courseNum = parseInt(course) || Math.floor(Math.random() * 10);
-        const angle = courseNum * (Math.PI * 2 / 10); 
-        const radius = 0.00025; // 약 25m 간격으로 둥글게 분산 배치
-        carPos = [HQ_COORD.lat + Math.cos(angle) * radius, HQ_COORD.lng + Math.sin(angle) * radius];
       }
+    } else if (isAllDone) {
+      // 모든 배송이 완료되었으면 본사로 천천히 이동
+      const curLat = predictedCarState[course].pos[0];
+      const curLng = predictedCarState[course].pos[1];
+      const distLat = HQ_COORD.lat - curLat;
+      const distLng = HQ_COORD.lng - curLng;
+      if (Math.abs(distLat) > 0.0005 || Math.abs(distLng) > 0.0005) {
+        predictedCarState[course].pos = [curLat + distLat * 0.04, curLng + distLng * 0.04];
+      }
+    }
+
+    carPos = predictedCarState[course].pos;
+
+    // 2. 향후 이동 경로 (현재 위치 -> 남은 목적지 -> 본사)
+    const rawPoints = [carPos];
+    pendingItems.forEach(it => {
+      if (it.latitude && it.longitude) {
+        rawPoints.push([parseFloat(it.latitude), parseFloat(it.longitude)]);
+      }
+    });
+
+    if (isAllDone || pendingItems.length > 0) {
+      rawPoints.push([HQ_COORD.lat, HQ_COORD.lng]); // 최종 복귀 지점 추가
+    }
+
+    // 3. 과거 이동 경로 (본사 -> 완료된 목적지들 -> 현재 위치)
+    const pastRawPoints = [[HQ_COORD.lat, HQ_COORD.lng]];
+    doneItems.forEach(it => {
+      if (it.latitude && it.longitude) pastRawPoints.push([parseFloat(it.latitude), parseFloat(it.longitude)]);
+    });
+    pastRawPoints.push(carPos);
+    
+    try {
+      const [pathData, pastPathData] = await Promise.all([
+        getRoadPath(rawPoints),
+        getRoadPath(pastRawPoints)
+      ]);
+      return { course, items, roadPoints: pathData.roadPoints, pastRoadPoints: pastPathData.roadPoints, legDurations: pathData.legDurations, carPos, isLiveGps, isActive, isAllDone, pendingItems };
+    } catch (e) {
+      console.error(`${course}호차 경로 로딩 실패:`, e);
+      return { course, items, roadPoints: rawPoints, pastRoadPoints: pastRawPoints, legDurations: [], carPos, isLiveGps, isActive, isAllDone, pendingItems };
+    }
+  });
+
+  const roadPathsResults = await Promise.all(roadPathPromises);
+
+  roadPathsResults.forEach(({ course, items, roadPoints, pastRoadPoints, legDurations, carPos, isLiveGps, isActive, isAllDone, pendingItems }) => {
+    const color = getCourseColor(course);
+    
+    // 1. 과거 이동 경로 (흐릿한 점선으로 지나온 길 표시)
+    if (pastRoadPoints && pastRoadPoints.length > 1) {
+      const pastPoly = L.polyline(pastRoadPoints, {color: color, weight: 6, opacity: 0.3, dashArray: '5, 10', className: 'past-route-line'});
+      tempLivePolylines.push(pastPoly);
+    }
+
+    // 2. 향후 이동 경로 (진한 실선 및 마칭 앤츠 애니메이션 가미)
+    const poly = L.polyline(roadPoints, {color: color, weight: 6, opacity: 0.8, className: 'animated-route-line'});
+    tempLivePolylines.push(poly);
+
+    // 각 배송처(pending)별 ETA 계산 및 핀 상단 툴팁 추가
+    if (isActive && !isAllDone && legDurations && legDurations.length > 0) {
+      let accumulatedTimeSeconds = 0;
+      pendingItems.forEach((pendingItem, index) => {
+        if (legDurations[index] !== undefined) {
+          accumulatedTimeSeconds += legDurations[index];
+        }
+        const marker = tempMarkers.find(m => m.options.title === String(pendingItem.id));
+        if (marker) {
+          const now = new Date();
+          // 현재까지의 주행 시간 + (이전 목적지들의 하차 작업 시간 3분씩 합산)
+          const totalSecondsToAdd = accumulatedTimeSeconds + (index * 180);
+          now.setSeconds(now.getSeconds() + totalSecondsToAdd);
+          
+          const etaString = now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+          
+          marker.bindTooltip(`
+            <div style="font-weight:900; color:${color}; font-size:12px; text-shadow: 1px 1px 0 #fff, -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff;">
+              <i class="fa-solid fa-clock"></i> ${etaString}
+            </div>
+          `, {
+            permanent: true,
+            direction: 'top',
+            offset: [0, -45],
+            className: 'leaflet-tooltip-eta',
+            opacity: 0.95
+          });
+        }
+      });
     }
 
     // 시뮬레이션 중인 코스는 실제/추정 마커를 맵에 중복 표시하지 않음
@@ -865,7 +961,6 @@ async function updateMapMarkers(data, drivers = []) {
       return;
     }
 
-    // 기사별 차량 아이콘 항상 노출 (HQ 상주 또는 주행 중)
     const carIcon = L.divIcon({
       className: 'live-vehicle-marker',
       html: `
@@ -876,7 +971,14 @@ async function updateMapMarkers(data, drivers = []) {
       `,
       iconSize: [38, 38], iconAnchor: [19, 19]
     });
-    const carMarker = L.marker(carPos, {icon: carIcon, zIndexOffset: 500});
+    
+    let carMarker = liveCarMarkers.find(m => m.options.courseId === course);
+    if (carMarker) {
+      carMarker.setLatLng(carPos);
+      // setIcon 호출 시 DOM이 재생성되어 CSS 부드러운 이동(transition) 애니메이션이 끊기는 문제 해결을 위해 생략
+    } else {
+      carMarker = L.marker(carPos, {icon: carIcon, zIndexOffset: 500, courseId: course});
+    }
 
     let carStatusLabel = '운행 전 (대기)';
     if (isActive && !isAllDone) carStatusLabel = '배송 운행 중';
@@ -884,14 +986,20 @@ async function updateMapMarkers(data, drivers = []) {
 
     const nextDestInfo = items.find(it => it.status !== 'done' && it.status !== 'excluded');
 
-    carMarker.bindPopup(`
+    const popupContent = `
       <div style="text-align:center;">
         <h4 style="margin:0 0 5px 0; color:${color};">${course}호차</h4>
         <span class="badge" style="background:${color}; color:white; font-size:0.75rem; padding:2px 6px; border-radius:4px;">${carStatusLabel}</span><br>
         <small style="display:block; margin-top:5px;">${isLiveGps ? '실시간 GPS 연동 중' : '본사(HQ) 대기 상태'}</small>
         ${nextDestInfo ? `<div style="margin-top:8px; padding-top:8px; border-top:1px dashed #ccc; font-weight:bold; color:#d63031;"><i class="fa-solid fa-flag-checkered"></i> 다음 목적지: ${nextDestInfo.name}</div>` : ''}
       </div>
-    `);
+    `;
+
+    if (carMarker.getPopup()) {
+      carMarker.setPopupContent(popupContent);
+    } else {
+      carMarker.bindPopup(popupContent);
+    }
 
     tempLiveCarMarkers.push(carMarker);
 
@@ -909,15 +1017,25 @@ async function updateMapMarkers(data, drivers = []) {
   });
 
   // [더블 버퍼링 교체 작업 실행]
-  // 1. 기존에 떠 있던 마커, 폴리라인, 기사 차량 마커를 맵에서 일괄 제거
+  // 1. 기존에 떠 있던 마커, 폴리라인 맵에서 일괄 제거
   markers.forEach(m => map.removeLayer(m));
   livePolylines.forEach(p => map.removeLayer(p));
-  liveCarMarkers.forEach(m => map.removeLayer(m));
+  
+  // 기존 차량 마커 중 이번 렌더링에 유지되지 않는 마커만 삭제
+  liveCarMarkers.forEach(m => {
+    if (!tempLiveCarMarkers.includes(m)) {
+      map.removeLayer(m);
+    }
+  });
 
-  // 2. 새로운 마커, 폴리라인, 기사 차량 마커를 일괄 맵에 추가 (깜빡임 원천 차단)
+  // 2. 새로운 마커, 폴리라인 맵에 추가
   tempMarkers.forEach(m => m.addTo(map));
   tempLivePolylines.forEach(p => p.addTo(map));
-  tempLiveCarMarkers.forEach(m => m.addTo(map));
+  
+  // 차량 마커는 이미 맵에 있는 경우 addTo를 생략, 없으면 추가
+  tempLiveCarMarkers.forEach(m => {
+    if (!map.hasLayer(m)) m.addTo(map);
+  });
 
   // 3. 글로벌 참조 변수 갱신
   markers = tempMarkers;
@@ -968,6 +1086,30 @@ function updateVehicleStatus(data, drivers = []) {
     let statusText = done === total ? '복귀중(완료)' : (isDeliveringNow ? '배송중' : (done > 0 ? '배송중' : '운행 전'));
     let cColor = getCourseColor(course);
     let progressPct = total > 0 ? Math.round((done/total)*100) : 0;
+    
+    // 현재 위치 요약 (텍스트 기반)
+    let locationStatus = '';
+    const pendingData = courseData.filter(d => d.status !== 'done').sort((a,b) => (a.order||0) - (b.order||0));
+    const completedData = courseData.filter(d => d.status === 'done').sort((a,b) => (a.order||0) - (b.order||0));
+    
+    if (done === total && total > 0) {
+      locationStatus = `<div style="font-size:0.85rem; color:#333; margin-top:8px;"><i class="fa-solid fa-house-chimney" style="color:var(--success);"></i> 현재: <b>모든 배송 완료 (본사 복귀 중)</b></div>`;
+    } else if (done === 0 && total > 0) {
+      if (pendingData.length > 0) {
+        locationStatus = `<div style="font-size:0.85rem; color:#333; margin-top:8px;"><i class="fa-solid fa-location-arrow" style="color:var(--primary);"></i> 다음 목적지: <b style="color:var(--primary);">${pendingData[0].name}</b> 이동 중</div>`;
+      } else {
+        locationStatus = `<div style="font-size:0.85rem; color:#666; margin-top:8px;"><i class="fa-solid fa-pause" style="color:var(--text-muted);"></i> 현재: <b>출발 대기 중</b></div>`;
+      }
+    } else {
+      const lastDoneName = completedData.length > 0 ? completedData[completedData.length-1].name : '';
+      const nextDestName = pendingData.length > 0 ? pendingData[0].name : '';
+      locationStatus = `
+        <div style="margin-top:8px; padding-top:8px; border-top:1px dashed #eee;">
+          <div style="font-size:0.8rem; color:#666; margin-bottom:4px;"><i class="fa-solid fa-check" style="color:var(--success);"></i> 최근 완료: <span style="text-decoration:line-through;">${lastDoneName}</span></div>
+          <div style="font-size:0.85rem; color:#333;"><i class="fa-solid fa-location-arrow" style="color:var(--primary);"></i> 현재 이동 중: <b style="color:var(--primary);">${nextDestName}</b></div>
+        </div>
+      `;
+    }
     
     const remaining = total - done;
     const traffic = getAiTrafficStatus(course);
@@ -1048,6 +1190,7 @@ function updateVehicleStatus(data, drivers = []) {
         <div style="width:100%; background:#e9ecef; height:6px; border-radius:3px; margin-top:8px; overflow:hidden;">
           <div style="width:${progressPct}%; background:${cColor}; height:100%; transition: width 0.5s ease;"></div>
         </div>
+        ${locationStatus}
         ${trafficHtml}
       </div>
     `;

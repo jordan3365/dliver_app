@@ -816,10 +816,23 @@
             map.setView([lat, lng], 16);
           }
 
-          // 10m 이상 실질적으로 이동했거나, 대기 중이더라도 60초 생존 주기 보고 시에만 서버 업데이트
-          if (lastUpdateData.time === 0 || (timeDiff > 5000 && distDiff > 0.01) || timeDiff > 60000) {
+          // 내비게이션급 실시간 갱신: 3m 이상 실질적으로 이동했거나, 대기 중이더라도 20초 생존 주기 보고 시
+          if (lastUpdateData.time === 0 || (timeDiff > 3000 && distDiff > 0.003) || timeDiff > 20000) {
             try {
-              await api.updateDriverLocation(currentUserCourse, lat, lng);
+              const userStr = localStorage.getItem('authUser');
+              const user = userStr ? JSON.parse(userStr) : null;
+              await api.saveGpsLog({
+                driver_id: user ? user.name : '',
+                course_id: currentUserCourse,
+                order_id: '',
+                lat: lat,
+                lng: lng,
+                speed: pos.coords.speed || 0,
+                heading: pos.coords.heading || 0,
+                accuracy: pos.coords.accuracy || 0,
+                battery: 100, // Not available via standard Web API easily, default to 100
+                status: 'delivering'
+              });
               lastUpdateData = { lat, lng, time: now };
               console.log('위치 갱신 성공(watch):', lat, lng);
               if (checkHQArrival(lat, lng)) return;
@@ -834,7 +847,7 @@
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
       );
 
-      // 타이머 기반 강제 폴백 위치 보고 (10초 주기) - watchPosition이 정지 상태에서 이벤트를 발생시키지 않는 문제(Hanging) 방지
+      // 타이머 기반 강제 폴백 위치 보고 (3초 주기) - 내비게이션처럼 부드러운 위치 갱신
       if (!locationTimerId) {
         locationTimerId = setInterval(() => {
           navigator.geolocation.getCurrentPosition(
@@ -844,10 +857,23 @@
               const now = Date.now();
               const timeDiff = now - lastUpdateData.time;
               
-              // watchPosition이 30초 이상 이벤트를 발생시키지 않거나 최초인 경우 강제 갱신
-              if (timeDiff > 30000 || lastUpdateData.time === 0) {
+              // watchPosition이 10초 이상 이벤트를 발생시키지 않거나 최초인 경우 강제 갱신
+              if (timeDiff > 10000 || lastUpdateData.time === 0) {
                 try {
-                  await api.updateDriverLocation(currentUserCourse, lat, lng);
+                  const userStr = localStorage.getItem('authUser');
+                  const user = userStr ? JSON.parse(userStr) : null;
+                  await api.saveGpsLog({
+                    driver_id: user ? user.name : '',
+                    course_id: currentUserCourse,
+                    order_id: '',
+                    lat: lat,
+                    lng: lng,
+                    speed: pos.coords.speed || 0,
+                    heading: pos.coords.heading || 0,
+                    accuracy: pos.coords.accuracy || 0,
+                    battery: 100,
+                    status: 'delivering'
+                  });
                   lastUpdateData = { lat, lng, time: now };
                   console.log('위치 갱신 성공(timer):', lat, lng);
                   if (checkHQArrival(lat, lng)) return;
@@ -855,9 +881,9 @@
               }
             },
             (err) => {},
-            { enableHighAccuracy: true, timeout: 5000, maximumAge: 10000 }
+            { enableHighAccuracy: true, timeout: 3000, maximumAge: 0 }
           );
-        }, 10000);
+        }, 3000);
       }
     }
 
@@ -1369,6 +1395,29 @@
       // 온라인 정상 모드
       try {
         showToast("배송 완료 처리 중...");
+        
+        // [고도화] 배송 완료 시점에 강제로 한 번 더 현재 위치를 전송하여 지도상 차량 마커 위치 동기화
+        navigator.geolocation.getCurrentPosition(
+          async (pos) => {
+            const userStr = localStorage.getItem('authUser');
+            const user = userStr ? JSON.parse(userStr) : null;
+            api.saveGpsLog({
+              driver_id: user ? user.name : '',
+              course_id: currentUserCourse,
+              order_id: '',
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+              speed: pos.coords.speed || 0,
+              heading: pos.coords.heading || 0,
+              accuracy: pos.coords.accuracy || 0,
+              battery: 100,
+              status: 'done_point'
+            }).catch(e => console.warn('배송완료 시점 위치 전송 실패:', e));
+          },
+          () => {},
+          { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+        );
+
         const res = await api.updateDeliveryStatus(id, 'done');
         if(res.success) {
           const item = currentData.find(d => d.id === id);

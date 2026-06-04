@@ -357,26 +357,31 @@ class ApiService {
     return new Promise((resolve) => {
       setTimeout(() => {
         let localNotices = JSON.parse(localStorage.getItem('dummyNotices') || '[]');
-    localNotices = localNotices.filter(n => String(n.target) !== String(target));
-    localStorage.setItem('dummyNotices', JSON.stringify(localNotices));
-    resolve({ success: true });
-  }, 300);
-});
-}
+        localNotices = localNotices.filter(n => String(n.target) !== String(target));
+        localStorage.setItem('dummyNotices', JSON.stringify(localNotices));
+        resolve({ success: true });
+      }, 300);
+    });
+  }
 
-async updateDriverLocation(course, lat, lng) {
-if(!useMock) return await this._fetch('updateDriverLocation', { course, lat, lng });
+  async updateDriverLocation(course, lat, lng) {
+    if(!useMock) return await this._fetch('updateDriverLocation', { course, lat, lng });
 
-// Mock 모드에서는 로컬스토리지에 저장
-return new Promise((resolve) => {
-  setTimeout(() => {
-    let locations = JSON.parse(localStorage.getItem('driverLocations') || '{}');
-    locations[course] = { lat, lng, updated: Date.now() };
-    localStorage.setItem('driverLocations', JSON.stringify(locations));
-    resolve({ success: true });
-  }, 100);
-});
-}
+    // Mock 모드에서는 로컬스토리지에 저장
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        let locations = JSON.parse(localStorage.getItem('driverLocations') || '{}');
+        locations[course] = { lat, lng, updated: Date.now() };
+        localStorage.setItem('driverLocations', JSON.stringify(locations));
+        resolve({ success: true });
+      }, 100);
+    });
+  }
+
+  async saveGpsLog(data) {
+    if(!useMock) return await this._fetch('saveGpsLog', data);
+    return new Promise(resolve => setTimeout(() => resolve({ success: true }), 100));
+  }
 }
 
 export const api = new ApiService();

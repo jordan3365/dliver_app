@@ -354,7 +354,7 @@ function addDeliveryPlace(payload) {
   const data = sheet.getDataRange().getValues();
   const newId = data.length > 1 ? Math.max(...data.slice(1).map(r => Number(r[0]))) + 1 : 1;
   const finalImages = uploadImagesToDrive(payload.deliveryPlaceImages, newId, payload.name);
-  sheet.appendRow([newId, payload.name||'', payload.address1||'', payload.address2||'', payload.phone||'', payload.memo||'', payload.boxCount||1, payload.latitude||'', payload.longitude||'', '', '', 'pending', JSON.stringify(finalImages), new Date()]);
+  sheet.appendRow([newId, payload.name||'', payload.address1||'', payload.address2||'', payload.phone||'', payload.memo||'', payload.boxCount||1, payload.latitude||'', payload.longitude||'', '', '', 'pending', JSON.stringify(finalImages), '']);
   CacheService.getScriptCache().remove('deliveryList_all');
   return { success: true, data: { id: newId, ...payload, deliveryPlaceImages: finalImages, status: 'pending', course: null } };
 }
@@ -398,7 +398,7 @@ function bulkAddDeliveryPlaces(payload) {
   let currentMaxId = data.length > 1 ? Math.max(...data.slice(1).map(r => Number(r[0]))) : 0;
   const rows = places.map(p => {
     currentMaxId++;
-    return [currentMaxId, p.name||'', p.address1||'', p.address2||'', p.phone||'', p.memo||'', p.boxCount||1, p.latitude||'', p.longitude||'', '', '', 'pending', p.deliveryPlaceImages ? JSON.stringify(p.deliveryPlaceImages) : '[]', new Date()];
+    return [currentMaxId, p.name||'', p.address1||'', p.address2||'', p.phone||'', p.memo||'', p.boxCount||1, p.latitude||'', p.longitude||'', '', '', 'pending', p.deliveryPlaceImages ? JSON.stringify(p.deliveryPlaceImages) : '[]', ''];
   });
   sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
   CacheService.getScriptCache().remove('deliveryList_all');
