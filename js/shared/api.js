@@ -1,8 +1,8 @@
 // api.js - 가짜 데이터 모드와 실제 통신(GAS) 모드를 스위칭할 수 있습니다.
 // 실제 연동 시 아래 useMock 을 false로 변경하고 GAS_WEB_APP_URL 에 URL을 넣으세요.
 // const useMock = true; 
-const useMock = false ;
-const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyTIAu9sUGgwR0YUq8QkzfdPKKyoQNa2KTAoO59-bg_mH44irWgB2T7nkXU2mWF_kjRXA/exec".trim();
+const useMock = false;
+const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyfbk52a_nNzYDb7lc73XmZPuyGt-i2dNWwM5WHDqLaGfgk-jvM0K5z6V3771aIOhmiSA/exec".trim();
 
 let dummyDeliveryData = [];
 let dummyDrivers = [
@@ -318,6 +318,16 @@ class ApiService {
         resolve({ success: true, data: localNotices ? JSON.parse(localNotices) : [] });
       }, 300);
     });
+  }
+
+  async getDeliveryAnalytics() {
+    if(!useMock) return (await this._fetch('getDeliveryAnalytics')).data;
+    return new Promise(resolve => setTimeout(() => resolve([]), 300));
+  }
+
+  async generateDeliveryAnalytics() {
+    if(!useMock) return (await this._fetch('generateDeliveryAnalytics')).success;
+    return new Promise(resolve => setTimeout(() => resolve(true), 300));
   }
 
   async saveNotice(target, content, images = []) {

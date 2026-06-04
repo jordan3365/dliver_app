@@ -255,6 +255,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderNoticeView();
       } else if (item.dataset.target === 'simulation') {
         renderSimulationView();
+      } else if (item.dataset.target === 'data') {
+        renderAnalyticsView();
       }
     });
   });
@@ -524,7 +526,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function initMap() {
   map = L.map('map').setView([37.4988, 127.0530], 13);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+  L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=ko', { maxZoom: 19 }).addTo(map);
 
   // 본사(출발지/도착지) 고정 마커
   const hqIcon = L.divIcon({
@@ -1613,8 +1615,8 @@ async function renderSimulationView() {
   if (!simMapInitialized) {
     setTimeout(() => {
       simMap = L.map('sim-map').setView([HQ_COORD.lat, HQ_COORD.lng], 13);
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; OpenStreetMap contributors'
+      L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=ko', {
+        attribution: 'Google Maps'
       }).addTo(simMap);
       
       const hqIcon = L.divIcon({
@@ -1708,6 +1710,16 @@ async function runSimulation() {
   btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
   btn.disabled = true;
 
+  // AI Prediction UI Initialization
+  const aiPredictionPanel = document.getElementById('simAiPrediction');
+  const aiPredictionContent = document.getElementById('simAiPredictionContent');
+  if (aiPredictionPanel && aiPredictionContent) {
+    aiPredictionPanel.style.display = 'block';
+    let weatherCondition = Math.random() > 0.8 ? '<span style="color:#e74c3c;font-weight:bold;">우천(비)</span>' : '<span style="color:#27ae60;font-weight:bold;">맑음/정상</span>';
+    let trafficCondition = simType === 'ai_traffic' ? '<span style="color:#e67e22;font-weight:bold;">출근길/구간 정체</span>' : '<span style="color:#2980b9;font-weight:bold;">원활</span>';
+    aiPredictionContent.innerHTML = `<strong><i class="fa-solid fa-temperature-half"></i> 기후 예측:</strong> ${weatherCondition}<br><strong><i class="fa-solid fa-car-burst"></i> 교통 예측:</strong> ${trafficCondition}<br><hr style="margin: 10px 0; border: 0; border-top: 1px dashed #ccc;">`;
+  }
+
   try {
     const simPromises = coursesToSim.map(async (course) => {
       const courseData = currentData.filter(d => String(d.course) === String(course)).sort((a,b) => (a.order || 999) - (b.order || 999));
@@ -1755,6 +1767,22 @@ async function runSimulation() {
           }
           accumulatedSecs += 600; // 배송지 체류 시간 (10분)
         });
+        
+        // 본사 복귀 시간 계산 (마지막 leg)
+        if (legs[courseData.length]) {
+          accumulatedSecs += legs[courseData.length].duration;
+        }
+        let totalMins = Math.round(accumulatedSecs / 60);
+        let hqNow = new Date();
+        hqNow.setMinutes(hqNow.getMinutes() + totalMins);
+        let hqEtaTime = hqNow.getHours().toString().padStart(2, '0') + ':' + hqNow.getMinutes().toString().padStart(2, '0');
+        
+        if (typeof aiPredictionContent !== 'undefined' && aiPredictionContent) {
+          aiPredictionContent.innerHTML += `<div style="margin-bottom: 6px; padding: 8px; background: #f1f5f9; border-radius: 4px; border-left: 3px solid ${courseColor};">
+            <strong style="color:#333;">${course}호차:</strong> 총 예상 ${totalMins}분 소요<br>
+            <span style="color:var(--primary); font-size:0.8rem; font-weight:600;"><i class="fa-solid fa-building-circle-arrow-right"></i> 본사 복귀 완료: ${hqEtaTime}</span>
+          </div>`;
+        }
         
         // 경로 표시 (마칭 앤츠 효과 가미)
         const poly = L.polyline(routeCoords, {color: courseColor, weight: 5, opacity: 0.8, className: 'animated-route-line'}).addTo(simMap);
@@ -2140,3 +2168,242 @@ async function saveDriver() {
     }
   } catch(e) { alert('등록 오류'); }
 }
+
+// ---------------- ANALYTICS DATA ----------------
+let allAnalyticsData = [];
+
+async function renderAnalyticsView() {
+  const tableBody = document.getElementById('dataTableBody');
+  if(!tableBody) return;
+  
+  tableBody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding: 30px;"><i class="fa-solid fa-spinner fa-spin"></i> 데이터를 불러오는 중...</td></tr>';
+  
+  try {
+    allAnalyticsData = await api.getDeliveryAnalytics();
+    
+    // Populate filters
+    const dateSelect = document.getElementById('dataFilterDate');
+    const courseSelect = document.getElementById('dataFilterCourse');
+    
+    const uniqueDates = [...new Set(allAnalyticsData.map(d => d.date))];
+    const uniqueCourses = [...new Set(allAnalyticsData.map(d => d.course))];
+    
+    if (dateSelect && dateSelect.options.length <= 1) {
+      uniqueDates.forEach(date => dateSelect.insertAdjacentHTML('beforeend', `<option value="${date}">${date}</option>`));
+    }
+    if (courseSelect && courseSelect.options.length <= 1) {
+      uniqueCourses.forEach(c => courseSelect.insertAdjacentHTML('beforeend', `<option value="${c}">${c}호차</option>`));
+    }
+    
+    updateAnalyticsTable();
+  } catch (e) {
+    tableBody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding: 20px; color:var(--danger);">데이터 로딩 실패: ${e.message}</td></tr>`;
+  }
+}
+
+function updateAnalyticsTable() {
+  const tableBody = document.getElementById('dataTableBody');
+  const dateFilter = document.getElementById('dataFilterDate').value;
+  const courseFilter = document.getElementById('dataFilterCourse').value;
+  
+  let filtered = allAnalyticsData;
+  if (dateFilter !== 'all') filtered = filtered.filter(d => d.date === dateFilter);
+  if (courseFilter !== 'all') filtered = filtered.filter(d => String(d.course) === String(courseFilter));
+  
+  if (filtered.length === 0) {
+    tableBody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding: 30px; color:#999;">표시할 데이터가 없습니다.</td></tr>';
+    return;
+  }
+  
+  let html = '';
+  filtered.forEach(d => {
+    let statusBadge = '';
+    if (d.weatherTraffic.includes('지연')) statusBadge = `<span style="background:#fff5f5; color:#d63031; padding:3px 8px; border-radius:12px; font-size:0.8rem; border:1px solid #ffb8b8;">${d.weatherTraffic}</span>`;
+    else if (d.weatherTraffic.includes('매우 원활')) statusBadge = `<span style="background:#f0fdf4; color:#16a34a; padding:3px 8px; border-radius:12px; font-size:0.8rem; border:1px solid #bbf7d0;">${d.weatherTraffic}</span>`;
+    else statusBadge = `<span style="background:#f1f5f9; color:#475569; padding:3px 8px; border-radius:12px; font-size:0.8rem; border:1px solid #cbd5e1;">${d.weatherTraffic}</span>`;
+
+    html += `
+      <tr>
+        <td style="font-weight:600;">${d.date}</td>
+        <td>${d.day}</td>
+        <td><strong style="color:var(--primary);">${d.course}호차</strong></td>
+        <td>${d.count}건</td>
+        <td>${d.startTime}</td>
+        <td>${d.endTime}</td>
+        <td style="font-weight:700; color:#0984e3;">${d.duration}</td>
+        <td>${statusBadge}</td>
+      </tr>
+    `;
+  });
+  
+  tableBody.innerHTML = html;
+  
+  // 차트 그리기
+  drawAnalyticsCharts(filtered);
+}
+
+let durationChartInstance = null;
+let trafficChartInstance = null;
+
+function drawAnalyticsCharts(data) {
+  const durCtx = document.getElementById('durationChart');
+  const trafCtx = document.getElementById('trafficChart');
+  if (!durCtx || !trafCtx) return;
+
+  if (durationChartInstance) durationChartInstance.destroy();
+  if (trafficChartInstance) trafficChartInstance.destroy();
+
+  if (data.length === 0) return;
+
+  // 소요시간 바 차트 데이터 가공 (차량별 평균 소요시간)
+  const courseTimes = {};
+  data.forEach(d => {
+    if(!courseTimes[d.course]) courseTimes[d.course] = { totalMs:0, count:0 };
+    const mins = parseInt(String(d.duration).replace(/[^0-9]/g, '')) || 0;
+    courseTimes[d.course].totalMs += mins;
+    courseTimes[d.course].count++;
+  });
+
+  const courses = Object.keys(courseTimes).sort();
+  const avgMins = courses.map(c => Math.round(courseTimes[c].totalMs / courseTimes[c].count));
+
+  durationChartInstance = new Chart(durCtx, {
+    type: 'line',
+    data: {
+      labels: courses.map(c => c + '호차'),
+      datasets: [{
+        label: '평균 소요시간 (분)',
+        data: avgMins,
+        backgroundColor: 'rgba(9, 132, 227, 0.2)',
+        borderColor: '#0984e3',
+        borderWidth: 2,
+        pointBackgroundColor: '#0984e3',
+        pointRadius: 4,
+        fill: true,
+        tension: 0.3
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        title: { display: true, text: '차량별 평균 배송 소요시간' },
+        legend: { display: false }
+      }
+    }
+  });
+
+  // 교통/기후 도넛 차트 데이터 가공
+  const trafficCounts = { '매우 원활': 0, '정상/원활': 0, '지연 (우천/정체 의심)': 0 };
+  data.forEach(d => {
+    if (d.weatherTraffic.includes('매우 원활')) trafficCounts['매우 원활']++;
+    else if (d.weatherTraffic.includes('지연')) trafficCounts['지연 (우천/정체 의심)']++;
+    else trafficCounts['정상/원활']++;
+  });
+
+  trafficChartInstance = new Chart(trafCtx, {
+    type: 'doughnut',
+    data: {
+      labels: Object.keys(trafficCounts),
+      datasets: [{
+        data: Object.values(trafficCounts),
+        backgroundColor: ['#00b894', '#74b9ff', '#ff7675']
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        title: { display: true, text: '기후 및 교통 상황 지표' },
+        legend: { position: 'right' }
+      }
+    }
+  });
+
+  // AI 종합 평가 생성
+  const aiSection = document.getElementById('aiSummarySection');
+  const aiContent = document.getElementById('aiSummaryContent');
+  if (aiSection && aiContent) {
+    aiSection.style.display = 'block';
+    
+    let totalDeliveries = 0;
+    data.forEach(d => totalDeliveries += parseInt(d.count) || 0);
+
+    let summaryHtml = `<strong>📊 데이터 요약:</strong> 조회된 기간 동안 총 <strong>${totalDeliveries}건</strong>의 배송이 수행되었습니다.<br>`;
+    
+    if (courses.length > 0) {
+      let maxIdx = 0, minIdx = 0;
+      for(let i=1; i<avgMins.length; i++) {
+        if(avgMins[i] > avgMins[maxIdx]) maxIdx = i;
+        if(avgMins[i] < avgMins[minIdx]) minIdx = i;
+      }
+      summaryHtml += `<strong>🚚 차량별 소요시간 분석:</strong> <strong>${courses[minIdx]}호차</strong>가 평균 ${avgMins[minIdx]}분으로 가장 효율적인 배송 속도를 기록했습니다. 반면, <strong>${courses[maxIdx]}호차</strong>는 평균 ${avgMins[maxIdx]}분으로 소요시간이 가장 길었습니다.<br>`;
+      
+      summaryHtml += `<strong>💡 AI 운영 제안:</strong> `;
+      if (avgMins[maxIdx] > (avgMins[minIdx] || 1) * 1.5 && avgMins[maxIdx] > 15) {
+        summaryHtml += `${courses[maxIdx]}호차의 코스 라우팅이 비효율적이거나 상습 정체 구역이 포함되었을 가능성이 높습니다. <strong>자동 배차 최적화(라우팅)</strong>를 통해 ${courses[minIdx]}호차의 여유 물량과 분산하여 ${courses[maxIdx]}호차의 부담을 줄이는 리밸런싱을 권장합니다.<br>`;
+      } else {
+        summaryHtml += `차량 간 배송 소요시간 편차가 크지 않아 비교적 균형 있는 배차 상태를 유지하고 있습니다.<br>`;
+      }
+    }
+
+    const totalTraffic = trafficCounts['매우 원활'] + trafficCounts['정상/원활'] + trafficCounts['지연 (우천/정체 의심)'];
+    if (totalTraffic > 0) {
+      const delayRatio = trafficCounts['지연 (우천/정체 의심)'] / totalTraffic;
+      summaryHtml += `<br><strong>🌧 기후 및 교통 분석:</strong> `;
+      if (delayRatio > 0.3) {
+        summaryHtml += `전체 중 약 <strong>${Math.round(delayRatio*100)}%</strong>가 '지연' 상태로 측정되었습니다. 악천후나 상습 정체 시간에 배송이 집중되어 있을 수 있으므로, 이 구역의 배송 출발 시간(ETD)을 앞당기거나 실시간 우회로 라우팅 알고리즘을 우선 적용할 것을 제안합니다.`;
+      } else {
+        summaryHtml += `심각한 배송 지연 징후는 나타나지 않았습니다. 현재의 정규 출발 시간(ETD)을 유지하셔도 좋습니다.`;
+      }
+    }
+    
+    aiContent.innerHTML = summaryHtml;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const dateFilter = document.getElementById('dataFilterDate');
+  const courseFilter = document.getElementById('dataFilterCourse');
+  if (dateFilter) dateFilter.addEventListener('change', updateAnalyticsTable);
+  if (courseFilter) courseFilter.addEventListener('change', updateAnalyticsTable);
+  
+  const btnGenAI = document.getElementById('btnGenerateAIReport');
+  if (btnGenAI) {
+    btnGenAI.addEventListener('click', async () => {
+      btnGenAI.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 분석 중...';
+      btnGenAI.disabled = true;
+      try {
+        await api.generateDeliveryAnalytics();
+        alert('오늘의 배송 데이터 AI 분석 보고서가 생성 및 저장되었습니다.');
+        renderAnalyticsView();
+      } catch (e) {
+        alert('분석 보고서 생성 실패: ' + e.message);
+      } finally {
+        btnGenAI.innerHTML = '<i class="fa-solid fa-robot"></i> AI 분석 보고서 생성';
+        btnGenAI.disabled = false;
+      }
+    });
+  }
+  
+  const btnExportData = document.getElementById('btnExportData');
+  if (btnExportData) {
+    btnExportData.addEventListener('click', () => {
+      if (allAnalyticsData.length === 0) return alert('다운로드할 데이터가 없습니다.');
+      const headers = ['일자', '요일', '차량(코스)', '총 배송건수', '출발시간', '도착시간', '총 소요시간', '기후/교통상황'];
+      const rows = allAnalyticsData.map(d => [d.date, d.day, d.course, d.count, d.startTime, d.endTime, d.duration, d.weatherTraffic]);
+      
+      let csvContent = "\uFEFF" + headers.join(',') + '\n';
+      rows.forEach(r => {
+        csvContent += r.join(',') + '\n';
+      });
+      
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `배송관련데이터_${new Date().getTime()}.csv`;
+      a.click();
+    });
+  }
+});

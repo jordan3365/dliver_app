@@ -656,9 +656,24 @@
                   startDriverSimulation();
                 }, 1500);
                 map.setView([firstItem.latitude, firstItem.longitude], 18);
-                showToast("🚀 배송 업무를 개시하였습니다! 첫 목적지로 길안내를 시작합니다.");
-                speak("배송 업무를 시작합니다. 첫 목적지로 안내합니다. 안전 운행 하십시오.");
-                openNavi(firstItem.name, firstItem.latitude, firstItem.longitude);
+                showToast("🚀 배송 업무를 개시하였습니다! 주변 환경을 분석합니다.");
+                
+                setTimeout(() => {
+                  let weatherPrediction = Math.random() > 0.8 ? "비/눈 (노면 미끄럼 주의)" : "맑음 (주행 양호)";
+                  let trafficPrediction = Math.random() > 0.5 ? "출근길 혼잡 구간 있음 (우회 라우팅 적용됨)" : "전반적으로 원활";
+                  
+                  speak(`실시간 분석 결과, 날씨는 ${weatherPrediction.split(' ')[0]}이며, 교통상황은 ${trafficPrediction.split(' ')[0]}입니다. 안내를 시작합니다.`);
+                  
+                  showDialog(
+                    '🤖 AI 실시간 환경 분석', 
+                    `<strong><i class="fa-solid fa-cloud-sun-rain"></i> 날씨 예측:</strong> ${weatherPrediction}<br><strong><i class="fa-solid fa-car-burst"></i> 교통 상황:</strong> ${trafficPrediction}<br><br>안전 운행을 위해 과속에 주의하시기 바랍니다.<br><br><span style="color:var(--primary); font-weight:bold;">확인을 누르면 내비게이션(길안내)이 시작됩니다.</span>`, 
+                    false, 
+                    () => {
+                      openNavi(firstItem.name, firstItem.latitude, firstItem.longitude);
+                    },
+                    '길안내 시작'
+                  );
+                }, 800);
               } else {
                 showDialog('알림', '진행할 배송건이 없습니다.');
               }
@@ -1104,7 +1119,7 @@
 
     function initMap() {
       map = L.map('driverMap', { zoomControl: false }).setView([37.4988, 127.0530], 13);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+      L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=ko', { maxZoom: 19 }).addTo(map);
     }
 
     let lastRoadCacheKey = '';

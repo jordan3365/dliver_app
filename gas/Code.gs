@@ -62,6 +62,14 @@ function setupSheets() {
     sheet5.getRange("A1:C1").setFontWeight("bold").setBackground("#6c5ce7").setFontColor("white");
     sheet5.setFrozenRows(1);
   }
+  
+  let sheetAnalytics = ss.getSheetByName('배송데이터_로그');
+  if (!sheetAnalytics) sheetAnalytics = ss.insertSheet('배송데이터_로그');
+  if (sheetAnalytics.getLastRow() === 0) {
+    sheetAnalytics.appendRow(['일자', '요일', '차량(코스)', '총배송건수', '출발시간', '도착시간', '총소요시간', '기후및교통']);
+    sheetAnalytics.getRange("A1:H1").setFontWeight("bold").setBackground("#00b894").setFontColor("white");
+    sheetAnalytics.setFrozenRows(1);
+  }
   let sheet6 = ss.getSheetByName('gps_logs');
   if (!sheet6) sheet6 = ss.insertSheet('gps_logs');
   if (sheet6.getLastRow() === 0) {
@@ -72,7 +80,7 @@ function setupSheets() {
 }
 
 // 읽기 전용 액션 목록 (락 불필요, CacheService 적용 대상)
-const READ_ACTIONS = new Set(['getDeliveryList','getDrivers','getNotices','login', 'getEtdReports', 'getGpsLogs']);
+const READ_ACTIONS = new Set(['getDeliveryList','getDrivers','getNotices','login', 'getEtdReports', 'getGpsLogs', 'getDeliveryAnalytics']);
 
 function doPost(e) {
   try {
@@ -89,6 +97,7 @@ function doPost(e) {
       else if (action === 'getNotices') result = getNotices();
       else if (action === 'getEtdReports') result = getEtdReports();
       else if (action === 'getGpsLogs') result = getGpsLogs(data);
+      else if (action === 'getDeliveryAnalytics') result = getDeliveryAnalytics(data);
       return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
     }
 
@@ -111,6 +120,7 @@ function doPost(e) {
       else if (action === 'updateBoxCount') result = updateBoxCount(data);
       else if (action === 'saveGpsLog') result = saveGpsLog(data);
       else if (action === 'generateEtdReport') result = generateEtdReport();
+      else if (action === 'generateDeliveryAnalytics') result = generateDeliveryAnalytics(data);
       else throw new Error('알 수 없는 Action: ' + action);
       return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
     } finally {
@@ -692,4 +702,109 @@ function generateEtdReport() {
   }
   
   return { success: true, data: reportText };
+}
+
+function getDeliveryAnalytics(payload) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('배송데이터_로그');
+  if (!sheet) return { success: true, data: [] };
+  const data = sheet.getDataRange().getValues();
+  data.shift(); // 헤더 제외
+  const result = data.map(r => ({
+    date: r[0] instanceof Date ? Utilities.formatDate(r[0], "Asia/Seoul", "yyyy-MM-dd") : r[0],
+    day: r[1],
+    course: r[2],
+    count: r[3],
+    startTime: r[4] instanceof Date ? Utilities.formatDate(r[4], "Asia/Seoul", "HH:mm") : r[4],
+    endTime: r[5] instanceof Date ? Utilities.formatDate(r[5], "Asia/Seoul", "HH:mm") : r[5],
+    duration: r[6],
+    weatherTraffic: r[7]
+  })).reverse();
+  return { success: true, data: result };
+}
+
+function generateDeliveryAnalytics(payload) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('배송목록');
+  const data = sheet.getDataRange().getValues();
+  data.shift();
+  
+  const todayDate = new Date();
+  const todayStr = Utilities.formatDate(todayDate, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  const days = ['일', '월', '화', '수', '목', '금', '토'];
+  const dayStr = days[todayDate.getDay()];
+  
+  let courseStats = {};
+  
+  data.forEach(row => {
+    if (!row[0] || !row[9] || row[11] === 'excluded') return;
+    const course = String(row[9]);
+    const status = row[11];
+    const arrivalTimeStr = row[13];
+    
+    if (!courseStats[course]) courseStats[course] = { total: 0, done: 0, times: [] };
+    
+    courseStats[course].total++;
+    if (status === 'done') courseStats[course].done++;
+    if (arrivalTimeStr) {
+      courseStats[course].times.push(new Date(arrivalTimeStr));
+    }
+  });
+
+  let logSheet = ss.getSheetByName('배송데이터_로그');
+  if (!logSheet) {
+    setupSheets(); // 안전장치
+    logSheet = ss.getSheetByName('배송데이터_로그');
+  }
+
+  // 중복 생성 방지: 오늘 날짜 기록은 덮어쓰기 위해 탐색
+  const logData = logSheet.getDataRange().getValues();
+  
+  let newRecords = [];
+  
+  Object.keys(courseStats).forEach(course => {
+    const stat = courseStats[course];
+    if (stat.total === 0 || stat.times.length === 0) return;
+    
+    stat.times.sort((a, b) => a - b);
+    
+    // 첫 배송 도착시간에서 약 20분을 뺀 시간을 출발 시간으로 추정 (가상)
+    const firstTime = stat.times[0];
+    const estimatedStartTime = new Date(firstTime.getTime() - 20 * 60000);
+    const lastTime = stat.times[stat.times.length - 1];
+    
+    const diffMs = lastTime - estimatedStartTime;
+    const diffMins = Math.round(diffMs / 60000);
+    
+    const startStr = Utilities.formatDate(estimatedStartTime, Session.getScriptTimeZone(), "HH:mm");
+    const endStr = Utilities.formatDate(lastTime, Session.getScriptTimeZone(), "HH:mm");
+    
+    let weatherTraffic = "정상/원활";
+    if (diffMins > stat.total * 20) {
+      weatherTraffic = "지연 (우천/정체 의심)";
+    } else if (diffMins < stat.total * 10) {
+      weatherTraffic = "매우 원활";
+    }
+
+    const rowData = [todayStr, dayStr, course, stat.total, startStr, endStr, diffMins + "분", weatherTraffic];
+    
+    let foundRow = -1;
+    for (let i = 1; i < logData.length; i++) {
+      if (String(logData[i][0]) === todayStr && String(logData[i][2]) === course) {
+        foundRow = i + 1;
+        break;
+      }
+    }
+    
+    if (foundRow > 0) {
+      logSheet.getRange(foundRow, 1, 1, rowData.length).setValues([rowData]);
+    } else {
+      newRecords.push(rowData);
+    }
+  });
+  
+  if (newRecords.length > 0) {
+    logSheet.getRange(logSheet.getLastRow() + 1, 1, newRecords.length, newRecords[0].length).setValues(newRecords);
+  }
+  
+  return { success: true };
 }

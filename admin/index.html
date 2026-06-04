@@ -322,6 +322,7 @@
       <a class="nav-item" data-target="notice"><i class="fa-solid fa-bullhorn"></i> 공지사항 관리</a>
       <a class="nav-item" data-target="clients"><i class="fa-solid fa-users"></i> 거래처 관리</a>
       <a class="nav-item" data-target="drivers"><i class="fa-solid fa-id-card"></i> 기사 관리</a>
+      <a class="nav-item" data-target="data"><i class="fa-solid fa-chart-bar"></i> 배송관련데이터</a>
     </div>
     <div class="user-info">
       <div>
@@ -382,11 +383,17 @@
 
     <!-- 배송 시뮬레이션 뷰 -->
     <section id="view-simulation" class="view-section">
-      <div class="card map-container" style="height: 100%;">
+      <div class="card map-container" style="height: 100%; position: relative;">
         <div class="card-header">
           <h4 class="card-title">가상 배송 주행 시뮬레이션</h4>
         </div>
-        <div id="sim-map" style="flex:1; width:100%; min-height:500px;"></div>
+        <div id="sim-map" style="flex:1; width:100%; min-height:500px; z-index: 1;"></div>
+        
+        <!-- AI 기후/교통 예측 패널 -->
+        <div id="simAiPrediction" style="position:absolute; top: 80px; right: 20px; z-index: 1000; background: rgba(255,255,255,0.95); padding: 15px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); width: 320px; display: none; max-height: calc(100% - 120px); overflow-y: auto;">
+          <h5 style="color:var(--primary); margin-bottom:10px; font-size: 0.95rem;"><i class="fa-solid fa-cloud-sun-rain"></i> AI 실시간 환경 및 예상 소요시간 예측</h5>
+          <div id="simAiPredictionContent" style="font-size:0.85rem; line-height: 1.5; color: #333;"></div>
+        </div>
         <div class="sim-overlay" style="bottom: 20px; left: 20px;">
           <span style="font-size:0.9rem; font-weight:600;"><i class="fa-solid fa-route"></i> 대상:</span>
           <select id="simCourse" class="form-control" style="width:auto; padding:6px; font-size:0.85rem;">
@@ -501,6 +508,63 @@
         </div>
       </div>
     </section>
+
+    <!-- 배송관련데이터 뷰 -->
+    <section id="view-data" class="view-section">
+      <div class="card" style="height: 100%;">
+        <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+          <h4 class="card-title">배송 지표 분석 데이터</h4>
+          <div style="display:flex; gap:10px; flex-wrap: wrap; justify-content: flex-end; align-items: center;">
+            <select id="dataFilterDate" class="form-control" style="padding:6px 10px; font-size:0.85rem; width: auto; max-width: 140px; text-overflow: ellipsis;">
+              <option value="all">전체 일자</option>
+            </select>
+            <select id="dataFilterCourse" class="form-control" style="padding:6px 10px; font-size:0.85rem; width: auto; max-width: 140px; text-overflow: ellipsis;">
+              <option value="all">전체 차량(코스)</option>
+            </select>
+            <button class="btn-primary" id="btnExportData" style="background:var(--success); padding: 6px 12px; font-size: 0.85rem; white-space: nowrap;"><i class="fa-solid fa-file-excel"></i> 엑셀 다운로드</button>
+            <button class="btn-primary" id="btnGenerateAIReport" style="background:var(--primary); padding: 6px 12px; font-size: 0.85rem; white-space: nowrap;"><i class="fa-solid fa-robot"></i> AI 분석 보고서 생성</button>
+          </div>
+        </div>
+        <div class="card-body" style="padding: 15px;">
+          <!-- 차트 영역 -->
+          <div style="display:flex; gap:20px; margin-bottom:20px; height: 250px;">
+            <div style="flex:1; border:1px solid var(--border-color); border-radius:8px; padding:10px; background: white;">
+              <canvas id="durationChart"></canvas>
+            </div>
+            <div style="flex:1; border:1px solid var(--border-color); border-radius:8px; padding:10px; background: white;">
+              <canvas id="trafficChart"></canvas>
+            </div>
+          </div>
+          
+          <!-- AI 분석 요약 섹션 추가 -->
+          <div id="aiSummarySection" style="margin-bottom: 20px; padding: 15px; border: 1px solid var(--border-color); border-radius: 8px; background: #F8FAFC; display: none;">
+             <h5 style="color: var(--primary); margin-bottom: 10px; font-size: 1rem;"><i class="fa-solid fa-wand-magic-sparkles"></i> AI 배송 종합 평가 및 운영 제안</h5>
+             <div id="aiSummaryContent" style="font-size: 0.9rem; line-height: 1.6; color: var(--text-main);"></div>
+          </div>
+          
+          <div style="overflow-x: auto; max-height: calc(100vh - 450px); border: 1px solid var(--border-color); border-radius:8px;">
+            <table class="data-table">
+              <thead style="position: sticky; top: 0; background: #F8FAFC; z-index: 10;">
+                <tr>
+                  <th>일자</th>
+                  <th>요일</th>
+                  <th>차량(코스)</th>
+                  <th>총 배송건수</th>
+                  <th>출발시간</th>
+                  <th>도착시간</th>
+                  <th>총 소요시간</th>
+                  <th>기후/교통상황</th>
+                </tr>
+              </thead>
+              <tbody id="dataTableBody">
+                 <tr><td colspan="8" style="text-align:center; padding:30px;">데이터를 불러오는 중...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <!-- 거래처 등록/수정 모달 -->
@@ -667,6 +731,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script type="module" src="./js/app.js"></script>
 </body>
 </html>
