@@ -812,16 +812,18 @@ async function updateMapMarkers(data, drivers = []) {
       const timeStr = driverInfo.currentLocation.updated || driverInfo.currentLocation.timestamp;
       if (timeStr) {
         const gpsTime = new Date(timeStr).getTime();
-        // 12시간 지나면 GPS 만료 (30분은 점심시간 등 휴식 시 마커 튀는 버그 유발)
-        if (!isNaN(gpsTime) && Math.abs(new Date().getTime() - gpsTime) > 12 * 60 * 60 * 1000) {
+        let diff = new Date().getTime() - gpsTime;
+        // 구글 앱스 스크립트 타임존 변환 버그 보정 (+9시간 또는 -9시간 오차 제거)
+        if (diff < -8 * 60 * 60 * 1000) diff += 9 * 60 * 60 * 1000;
+        else if (diff > 8 * 60 * 60 * 1000) diff -= 9 * 60 * 60 * 1000;
+        
+        // 하이브리드 로직: 3분 이내면 실시간 GPS 추적. 3분 이상 수신이 없으면(화면 꺼짐 등) 즉시 시뮬레이션으로 부드럽게 폴백(Fallback)
+        if (!isNaN(gpsTime) && Math.abs(diff) > 3 * 60 * 1000) {
           isRecent = false;
         }
       } else { isRecent = false; }
 
       if (isRecent && !isNaN(latGps) && !isNaN(lngGps) && latGps !== 0 && lngGps !== 0) {
-        // 사용자의 요청에 따라 실제 GPS보다 '최근 배송처 -> 다음 배송처' 상태 기반 예측 이동을 우선 적용하기 위해, 
-        // GPS 위치를 바로 carPos로 덮어쓰지 않고 로직을 하단 예측 로직으로 일원화합니다.
-        // isLiveGps 플래그만 남겨둡니다.
         isLiveGps = true;
       }
     }
@@ -850,8 +852,26 @@ async function updateMapMarkers(data, drivers = []) {
       predictedCarState[course] = { pos: [...basePos], lastDoneId: lastDoneId };
     }
 
-    // 다음 배송처로 천천히 3%씩 이동 (상태 기반 시뮬레이션 내비게이션 효과)
-    if (isActive && pendingItems.length > 0) {
+    if (isLiveGps) {
+      // 1. 실시간 GPS 추적 활성화 시
+      predictedCarState[course].pos = [parseFloat(driverInfo.currentLocation.lat), parseFloat(driverInfo.currentLocation.lng)];
+      if (isAllDone) {
+        const curLat = predictedCarState[course].pos[0];
+        const curLng = predictedCarState[course].pos[1];
+        if (Math.abs(HQ_COORD.lat - curLat) <= 0.001 && Math.abs(HQ_COORD.lng - curLng) <= 0.001) {
+          isLiveGps = false;
+          predictedCarState[course].pos = [HQ_COORD.lat, HQ_COORD.lng];
+          if (!hqArrivedCourses.has(course)) {
+            hqArrivedCourses.add(course);
+            speak(`${course}호차가 본사에 도착하여 실시간 관제를 종료합니다.`);
+            showToast(`${course}호차 본사 도착 완료 (관제 종료)`);
+          }
+        }
+      }
+    } else {
+      // 2. 실시간 GPS 유실 시 (예측 이동 시뮬레이션)
+      // 다음 배송처로 천천히 이동 (실제 도로 경로를 따라가는 하이브리드 내비게이션 효과)
+      if (isActive && pendingItems.length > 0) {
       hqArrivedCourses.delete(course); // 배송 중이면 도착 상태 해제
       
       const nextDest = pendingItems[0];
@@ -866,7 +886,25 @@ async function updateMapMarkers(data, drivers = []) {
         
         // 너무 가까워지면(약 100m 이내) 더 이상 이동하지 않고 해당 위치에서 배송 완료 대기
         if (Math.abs(distLat) > 0.001 || Math.abs(distLng) > 0.001) {
-          predictedCarState[course].pos = [curLat + distLat * 0.04, curLng + distLng * 0.04];
+          let moved = false;
+          const roadPath = predictedCarState[course].lastRoadPoints;
+          if (roadPath && roadPath.length > 1) {
+            let targetIdx = 1;
+            let dLat = roadPath[targetIdx][0] - curLat;
+            let dLng = roadPath[targetIdx][1] - curLng;
+            // 앞쪽으로 약 20~30m 떨어진 도로 위 목표점(lookahead)을 찾음
+            while (Math.abs(dLat) + Math.abs(dLng) < 0.0003 && targetIdx < roadPath.length - 1) {
+              targetIdx++;
+              dLat = roadPath[targetIdx][0] - curLat;
+              dLng = roadPath[targetIdx][1] - curLng;
+            }
+            // 목표점을 향해 부드럽게 스티어링(이동)
+            predictedCarState[course].pos = [curLat + dLat * 0.25, curLng + dLng * 0.25];
+            moved = true;
+          }
+          if (!moved) {
+            predictedCarState[course].pos = [curLat + distLat * 0.04, curLng + distLng * 0.04];
+          }
         }
       }
     } else if (isAllDone) {
@@ -876,10 +914,25 @@ async function updateMapMarkers(data, drivers = []) {
       const distLat = HQ_COORD.lat - curLat;
       const distLng = HQ_COORD.lng - curLng;
       if (Math.abs(distLat) > 0.001 || Math.abs(distLng) > 0.001) {
-        predictedCarState[course].pos = [curLat + distLat * 0.04, curLng + distLng * 0.04];
+        let moved = false;
+        const roadPath = predictedCarState[course].lastRoadPoints;
+        if (roadPath && roadPath.length > 1) {
+          let targetIdx = 1;
+          let dLat = roadPath[targetIdx][0] - curLat;
+          let dLng = roadPath[targetIdx][1] - curLng;
+          while (Math.abs(dLat) + Math.abs(dLng) < 0.0003 && targetIdx < roadPath.length - 1) {
+            targetIdx++;
+            dLat = roadPath[targetIdx][0] - curLat;
+            dLng = roadPath[targetIdx][1] - curLng;
+          }
+          predictedCarState[course].pos = [curLat + dLat * 0.25, curLng + dLng * 0.25];
+          moved = true;
+        }
+        if (!moved) {
+          predictedCarState[course].pos = [curLat + distLat * 0.04, curLng + distLng * 0.04];
+        }
       } else {
         // 본사(HQ)에 완전히 도착한 경우
-        isLiveGps = false; // LIVE 배지 자동 종료
         predictedCarState[course].pos = [HQ_COORD.lat, HQ_COORD.lng]; // 완전히 본사에 스냅
         if (!hqArrivedCourses.has(course)) {
           hqArrivedCourses.add(course);
@@ -888,6 +941,7 @@ async function updateMapMarkers(data, drivers = []) {
         }
       }
     }
+    } // Close the 'else' block from line 867
 
     carPos = predictedCarState[course].pos;
 
@@ -915,6 +969,12 @@ async function updateMapMarkers(data, drivers = []) {
         getRoadPath(rawPoints),
         getRoadPath(pastRawPoints)
       ]);
+      
+      // 다음 번 이동 로직에서 실제 도로를 따라가게 하기 위해 경로 캐싱
+      if (predictedCarState[course]) {
+        predictedCarState[course].lastRoadPoints = pathData.roadPoints;
+      }
+      
       return { course, items, roadPoints: pathData.roadPoints, pastRoadPoints: pastPathData.roadPoints, legDurations: pathData.legDurations, carPos, isLiveGps, isActive, isAllDone, pendingItems };
     } catch (e) {
       console.error(`${course}호차 경로 로딩 실패:`, e);
@@ -984,6 +1044,23 @@ async function updateMapMarkers(data, drivers = []) {
       iconSize: [38, 38], iconAnchor: [19, 19]
     });
     
+    let carStatusLabel = '운행 전 (대기)';
+    let showLiveBadge = false;
+    
+    // 배송 중이거나 모든 배송을 마치고 본사로 복귀 중(도착 전)이면 LIVE 배지를 켬
+    if (isActive) {
+      carStatusLabel = '배송 운행 중';
+      showLiveBadge = true;
+    } else if (isAllDone) {
+      if (!hqArrivedCourses.has(course)) {
+        carStatusLabel = '운행 완료 (HQ 복귀 중)';
+        showLiveBadge = true; // 본사에 도착할 때까지는 LIVE 배지 유지
+      } else {
+        carStatusLabel = '운행 완료 (HQ 도착)';
+        showLiveBadge = false;
+      }
+    }
+
     let carMarker = liveCarMarkers.find(m => m.options.courseId === course);
     if (carMarker) {
       carMarker.setLatLng(carPos);
@@ -992,7 +1069,7 @@ async function updateMapMarkers(data, drivers = []) {
       const el = carMarker.getElement();
       if (el) {
         const badge = el.querySelector('.live-badge');
-        if (isLiveGps) {
+        if (showLiveBadge) {
           if (!badge) {
             const container = el.querySelector('.car-marker-container');
             if (container) container.insertAdjacentHTML('beforeend', '<span class="live-badge" style="top: -12px; right: -12px; background: #2ecc71; color: white; padding: 2px 5px; font-size: 9px; font-weight: bold; border-radius: 4px; position: absolute; box-shadow: 0 0 5px rgba(0,0,0,0.2);">LIVE</span>');
@@ -1003,11 +1080,19 @@ async function updateMapMarkers(data, drivers = []) {
       }
     } else {
       carMarker = L.marker(carPos, {icon: carIcon, zIndexOffset: 500, courseId: course});
+      // 마커 생성 직후 뱃지 상태 동기화
+      setTimeout(() => {
+        const el = carMarker.getElement();
+        if (el) {
+          const badge = el.querySelector('.live-badge');
+          if (!showLiveBadge && badge) badge.remove();
+          else if (showLiveBadge && !badge) {
+             const container = el.querySelector('.car-marker-container');
+             if (container) container.insertAdjacentHTML('beforeend', '<span class="live-badge" style="top: -12px; right: -12px; background: #2ecc71; color: white; padding: 2px 5px; font-size: 9px; font-weight: bold; border-radius: 4px; position: absolute; box-shadow: 0 0 5px rgba(0,0,0,0.2);">LIVE</span>');
+          }
+        }
+      }, 50);
     }
-
-    let carStatusLabel = '운행 전 (대기)';
-    if (isActive && !isAllDone) carStatusLabel = '배송 운행 중';
-    else if (isAllDone) carStatusLabel = '운행 완료 (HQ 복귀)';
 
     const nextDestInfo = items.find(it => it.status !== 'done' && it.status !== 'excluded');
 
@@ -1015,7 +1100,7 @@ async function updateMapMarkers(data, drivers = []) {
       <div style="text-align:center;">
         <h4 style="margin:0 0 5px 0; color:${color};">${course}호차</h4>
         <span class="badge" style="background:${color}; color:white; font-size:0.75rem; padding:2px 6px; border-radius:4px;">${carStatusLabel}</span><br>
-        <small style="display:block; margin-top:5px;">${isLiveGps ? '실시간 GPS 연동 중' : '본사(HQ) 대기 상태'}</small>
+        <small style="display:block; margin-top:5px;">${isLiveGps ? '실시간 GPS 수신 중' : 'AI 도로 주행 시뮬레이션 중'}</small>
         ${nextDestInfo ? `<div style="margin-top:8px; padding-top:8px; border-top:1px dashed #ccc; font-weight:bold; color:#d63031;"><i class="fa-solid fa-flag-checkered"></i> 다음 목적지: ${nextDestInfo.name}</div>` : ''}
       </div>
     `;
@@ -2575,3 +2660,32 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 });
+
+// --- 자정(00:00) 시스템 자동 초기화 로직 ---
+function scheduleMidnightReset() {
+  const now = new Date();
+  const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0);
+  const timeUntilMidnight = nextMidnight.getTime() - now.getTime();
+  
+  console.log(`자정 자동 초기화 타이머 설정됨. (약 ${Math.round(timeUntilMidnight / 1000 / 60)}분 후 실행)`);
+  
+  setTimeout(async () => {
+    console.log("자정 00:00 - 시스템 자동 초기화 실행");
+    try {
+      const res = await api.resetAllDeliveryStatus();
+      if (res && res.success !== false) {
+        api.sendAdminNotification('자정 00:00 기준 전체 시스템이 자동 초기화되었습니다.');
+        alertedArrivals.clear();
+        if (typeof loadDashboardData === 'function') await loadDashboardData();
+        showAdminDialog('알림', '자정(00:00)을 넘겨 시스템이 자동으로 초기화되었습니다.');
+      }
+    } catch (e) {
+      console.error("자정 자동 초기화 실패:", e);
+    }
+    // 다음 날 자정을 위해 다시 스케줄링
+    scheduleMidnightReset();
+  }, timeUntilMidnight);
+}
+
+// 스크립트 로드 시 즉시 스케줄러 실행
+scheduleMidnightReset();

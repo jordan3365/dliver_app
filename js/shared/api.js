@@ -2,7 +2,7 @@
 // 실제 연동 시 아래 useMock 을 false로 변경하고 GAS_WEB_APP_URL 에 URL을 넣으세요.
 // const useMock = true; 
 const useMock = false;
-const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyfbk52a_nNzYDb7lc73XmZPuyGt-i2dNWwM5WHDqLaGfgk-jvM0K5z6V3771aIOhmiSA/exec".trim();
+const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxWQWVVT9mu2PivCu9lQNzNYGv6RjLuNPavpmomlanIsF9rvTrF8Rgqih0-YEHaIO5a5Q/exec".trim();
 
 let dummyDeliveryData = [];
 let dummyDrivers = [
@@ -47,7 +47,7 @@ class ApiService {
     this._cache[key] = { value, ts: Date.now() };
   }
 
-  _getCache(key, ttlMs = 3000) {
+  _getCache(key, ttlMs = 1500) {
     const entry = this._cache[key];
     if (entry && (Date.now() - entry.ts) < ttlMs) return entry.value;
     return null;

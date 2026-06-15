@@ -1,6 +1,6 @@
 const fetch = require('node-fetch');
 
-const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxMmRq0BxdBhb5GGm3EN_UXwyTJItP8ZWurdVlTlSLmeNQdFx1rdyQMFw9WedSfLxKa0w/exec";
+const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxWQWVVT9mu2PivCu9lQNzNYGv6RjLuNPavpmomlanIsF9rvTrF8Rgqih0-YEHaIO5a5Q/exec";
 
 async function run() {
   const res = await fetch(GAS_WEB_APP_URL, {

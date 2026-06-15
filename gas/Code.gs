@@ -145,7 +145,7 @@ function login(payload) {
       if (username === 'admin') {
         return { success: true, data: { role: 'admin', name: row[1], token: 'real-admin-token' } };
       } else {
-        return { success: true, data: { role: 'driver', name: row[1], course: String(row[4]), token: 'real-driver-token' } };
+        return { success: true, data: { role: 'driver', name: row[1], course: String(row[4]), phone: String(row[5]), token: 'real-driver-token' } };
       }
     }
   }
@@ -272,15 +272,15 @@ function resetAllDeliveryStatus() {
     });
     cacheKeys = cacheKeys.concat(Array.from(uniqueCourses));
 
-    // 상태 컬럼(L열=12번째) 전체를 배열로 한 번에 덮어쓰기 (핵심 최적화)
+    // 상태 컬럼(L열=12번째), 완료시간(M열=13번째), 서명/사진(N열=14번째) 전체를 배열로 한 번에 덮어쓰기 (핵심 최적화)
     const count = lastRow - 1;
-    const statusValues = Array.from({ length: count }, () => ['pending']);
-    sheet.getRange(2, 12, count, 1).setValues(statusValues);
+    const resetValues = Array.from({ length: count }, () => ['pending', '', '']);
+    sheet.getRange(2, 12, count, 3).setValues(resetValues);
   }
 
   const locSheet = ss.getSheetByName('실시간위치');
   if (locSheet && locSheet.getLastRow() > 1) {
-    locSheet.deleteRows(2, locSheet.getLastRow() - 1);
+    locSheet.getRange(2, 1, locSheet.getLastRow() - 1, locSheet.getLastColumn()).clearContent();
   }
 
   // 모든 배송 캐시 무효화
