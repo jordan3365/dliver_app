@@ -939,6 +939,82 @@
       }, 3000); // 3초 간격으로 도로를 따라 한 정거장씩 부드럽게 주행
     }
 
+    // ───────────────────────────────────────────────
+    // TTS 음성 (모바일 브라우저 초기화 타이밍 문제를 Promise로 해결)
+    // ───────────────────────────────────────────────
+    let _driverVoicesReady = false;
+    let _driverVoicesList = [];
+
+    function _initDriverVoices() {
+      return new Promise((resolve) => {
+        if (_driverVoicesReady) return resolve(_driverVoicesList);
+        const voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+        if (voices.length > 0) {
+          _driverVoicesList = voices;
+          _driverVoicesReady = true;
+          return resolve(voices);
+        }
+        if (window.speechSynthesis) {
+          window.speechSynthesis.addEventListener('voiceschanged', function handler() {
+            _driverVoicesList = window.speechSynthesis.getVoices();
+            _driverVoicesReady = true;
+            window.speechSynthesis.removeEventListener('voiceschanged', handler);
+            resolve(_driverVoicesList);
+          });
+        }
+        // 최대 2초 후 폴백
+        setTimeout(() => {
+          if (!_driverVoicesReady) {
+            _driverVoicesList = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+            _driverVoicesReady = true;
+            resolve(_driverVoicesList);
+          }
+        }, 2000);
+      });
+    }
+
+    async function speak(text) {
+      if (!window.speechSynthesis) return;
+      const voices = await _initDriverVoices();
+
+      // 모바일 사파리/크론 음성 잠금 해제: 무음 발화 대신 기존 큐를 안전하게 사용
+      try { window.speechSynthesis.cancel(); } catch(e) {}
+
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'ko-KR';
+
+      // 관리자앱과 동일한 음성 우선순위 (일관성)
+      const preferredNames = [
+        'Google 한국의', 'Google Korean',
+        'Microsoft SunHi', 'Microsoft Heami',
+        'Yuna', 'Sora',
+      ];
+      let selectedVoice = null;
+      for (const name of preferredNames) {
+        selectedVoice = voices.find(v => v.lang.startsWith('ko') && v.name.includes(name));
+        if (selectedVoice) break;
+      }
+      if (!selectedVoice) {
+        selectedVoice = voices.find(v => v.lang.startsWith('ko') && v.localService)
+                     || voices.find(v => v.lang.startsWith('ko'));
+      }
+      if (selectedVoice) utterance.voice = selectedVoice;
+
+      utterance.rate = 0.95;
+      utterance.pitch = 1.05;
+      utterance.volume = 1.0;
+
+      // 스피치 실패 시 캐존 복구
+      utterance.onerror = (event) => {
+        if (event.error !== 'interrupted') {
+          console.warn("TTS 오류, 큐 스케즐요:", event.error);
+          window.speechSynthesis.cancel();
+        }
+      };
+
+      window.speechSynthesis.speak(utterance);
+    }
+
     function getDist(lat1, lon1, lat2, lon2) {
       if (!lat1 || !lat2) return 999;
       const R = 6371; 
@@ -987,54 +1063,6 @@
       return points;
     }
 
-    let sysVoices = [];
-    if (window.speechSynthesis) {
-      window.speechSynthesis.onvoiceschanged = () => {
-        sysVoices = window.speechSynthesis.getVoices();
-      };
-      sysVoices = window.speechSynthesis.getVoices();
-    }
-
-    function speak(text) {
-      if (!window.speechSynthesis) return;
-      
-      // 모바일 사파리/크롬 Speech 락 해제를 위한 무음 큐 삽입
-      try {
-        window.speechSynthesis.cancel();
-        const silentUtterance = new SpeechSynthesisUtterance("");
-        silentUtterance.lang = 'ko-KR';
-        window.speechSynthesis.speak(silentUtterance);
-      } catch (e) {
-        console.warn("Speech silent unlock failed", e);
-      }
-
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'ko-KR';
-      
-      if (sysVoices.length === 0) sysVoices = window.speechSynthesis.getVoices();
-      // 자연스러운 구글 여성 음성을 최우선으로 매핑 (Google 한국의, ko-KR)
-      const preferredVoices = ['Google 한국의', 'ko-KR', 'Microsoft SunHi', 'Yuna', 'Sora'];
-      let selectedVoice = null;
-      
-      for (let pref of preferredVoices) {
-        selectedVoice = sysVoices.find(v => v.lang.includes('ko') && v.name.includes(pref));
-        if (selectedVoice) break;
-      }
-      if (!selectedVoice) selectedVoice = sysVoices.find(v => v.lang.includes('ko'));
-      
-      if (selectedVoice) utterance.voice = selectedVoice;
-      
-      utterance.rate = 1.0;
-      utterance.pitch = 1.1; // 여성 음색에 맞춰 피치 살짝 조정
-
-      // 스피치 실패 시 캔슬 복구 안전핀
-      utterance.onerror = (event) => {
-        console.warn("TTS Speech Error detected, resetting queue:", event.error);
-        window.speechSynthesis.cancel();
-      };
-      
-      window.speechSynthesis.speak(utterance);
-    }
 
     async function checkNotice() {
       try {

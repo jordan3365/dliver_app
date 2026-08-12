@@ -1,8 +1,10 @@
-// api.js - 가짜 데이터 모드와 실제 통신(GAS) 모드를 스위칭할 수 있습니다.
-// 실제 연동 시 아래 useMock 을 false로 변경하고 GAS_WEB_APP_URL 에 URL을 넣으세요.
-// const useMock = true; 
-const useMock = false;
-const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxWQWVVT9mu2PivCu9lQNzNYGv6RjLuNPavpmomlanIsF9rvTrF8Rgqih0-YEHaIO5a5Q/exec".trim();
+// api.js - GAS 백엔드 통신 레이어
+// ⚠️ GAS URL 및 모드 변경은 js/shared/config.js 한 곣에서만 하세요!
+import { GAS_URL, USE_MOCK, TIMEOUT } from './config.js';
+
+// 내부에서 config 값을 로컴 변수로 매핑 (기존 코드 호환성 유지)
+const useMock = USE_MOCK;
+const GAS_WEB_APP_URL = GAS_URL;
 
 let dummyDeliveryData = [];
 let dummyDrivers = [
@@ -66,7 +68,9 @@ class ApiService {
 
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
+        // 읽기/쓰기 타임아웃을 config에서 가져와 일관 적용
+        const timeoutMs = this._cacheReadActions.has(action) ? TIMEOUT.read : TIMEOUT.write;
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
         const url = GAS_WEB_APP_URL + (GAS_WEB_APP_URL.includes('?') ? '&' : '?') + 't=' + Date.now();
         const response = await fetch(url, {

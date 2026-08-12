@@ -133,19 +133,34 @@ function doPost(e) {
 
 function login(payload) {
   const { username, password } = payload;
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('기사목록');
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) throw new Error('등록된 기사 정보가 없습니다.');
-  const data = sheet.getRange(2, 1, lastRow - 1, 7).getValues();
+  
+  // 로그인 속도(처리속도) 극대화를 위한 인증 데이터 캐시 적용
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'drivers_auth_data';
+  let cachedData = cache.get(cacheKey);
+  let data;
+  
+  if (cachedData) {
+    data = JSON.parse(cachedData);
+  } else {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('기사목록');
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) throw new Error('등록된 기사 정보가 없습니다.');
+    data = sheet.getRange(2, 1, lastRow - 1, 7).getValues();
+    cache.put(cacheKey, JSON.stringify(data), 600); // 10분간 캐시 유지
+  }
+
   for (let i = 0; i < data.length; i++) {
     const row = data[i];
     const storedPw = String(row[3]);
     const inputPw = String(password);
     if (row[2] === username && (storedPw === inputPw || storedPw === hashPassword(inputPw))) {
+      // 세션 토큰: 현재 시간 + 코스 조합으로 일정 수준의 유일성 확보
+      const sessionToken = Utilities.base64Encode(username + ':' + new Date().getTime());
       if (username === 'admin') {
-        return { success: true, data: { role: 'admin', name: row[1], token: 'real-admin-token' } };
+        return { success: true, data: { role: 'admin', name: row[1], token: sessionToken } };
       } else {
-        return { success: true, data: { role: 'driver', name: row[1], course: String(row[4]), phone: String(row[5]), token: 'real-driver-token' } };
+        return { success: true, data: { role: 'driver', name: row[1], course: String(row[4]), phone: String(row[5]), token: sessionToken } };
       }
     }
   }
@@ -352,7 +367,9 @@ function uploadImagesToDrive(images, placeId, placeName) {
 function addDeliveryPlace(payload) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('배송목록');
   const data = sheet.getDataRange().getValues();
-  const newId = data.length > 1 ? Math.max(...data.slice(1).map(r => Number(r[0]))) + 1 : 1;
+  // 헤더만 있는 경우(data.length===1) Math.max에 빈 배열을 전달하는 버그 피스 (반환값이 -Infinity가 되는 문제)
+  const rows = data.slice(1).filter(r => r[0]);
+  const newId = rows.length > 0 ? Math.max(...rows.map(r => Number(r[0]))) + 1 : 1;
   const finalImages = uploadImagesToDrive(payload.deliveryPlaceImages, newId, payload.name);
   sheet.appendRow([newId, payload.name||'', payload.address1||'', payload.address2||'', payload.phone||'', payload.memo||'', payload.boxCount||1, payload.latitude||'', payload.longitude||'', '', '', 'pending', JSON.stringify(finalImages), '']);
   CacheService.getScriptCache().remove('deliveryList_all');
@@ -462,21 +479,15 @@ function updateDriverLocation(payload) {
 }
 
 function saveGpsLog(payload) {
-  const lock = LockService.getScriptLock();
-  try {
-    lock.waitLock(10000);
-    const { driver_id, course_id, order_id, lat, lng, speed, heading, accuracy, battery, status } = payload;
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('gps_logs');
-    const id = new Date().getTime(); // timestamp as ID
-    sheet.appendRow([id, driver_id, course_id, order_id, lat, lng, speed, heading, accuracy, battery, status, new Date().toISOString()]);
-    
-    // 동시에 실시간 위치 테이블도 업데이트 (기존 로직 호환 유지)
-    updateDriverLocation({ course: course_id, lat, lng });
-  } catch(e) {
-    console.error("GPS 로깅 락 획득 실패:", e);
-  } finally {
-    lock.releaseLock();
-  }
+  // doPost()에서 이미 UserLock을 획득했으므로 내부에서 ScriptLock을 다시 획득하면
+  // 이중 락 충돌이 발생하여 3초 주기 GPS 전송 시 심각한 지연이 생깁니다. → 제거
+  const { driver_id, course_id, order_id, lat, lng, speed, heading, accuracy, battery, status } = payload;
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('gps_logs');
+  const id = new Date().getTime(); // timestamp as ID
+  sheet.appendRow([id, driver_id, course_id, order_id, lat, lng, speed, heading, accuracy, battery, status, new Date().toISOString()]);
+  
+  // 동시에 실시간 위치 테이블도 업데이트 (기존 로직 호환 유지)
+  updateDriverLocation({ course: course_id, lat, lng });
   return { success: true };
 }
 
@@ -507,7 +518,7 @@ function addDriver(payload) {
   const data = sheet.getDataRange().getValues();
   const newId = data.length > 1 ? Math.max(...data.slice(1).map(r => Number(r[0]))) + 1 : 1;
   sheet.appendRow([newId, payload.name, payload.username, hashPassword('1111'), payload.course, payload.phone||'', new Date()]);
-  CacheService.getScriptCache().remove('drivers_all');
+  CacheService.getScriptCache().removeAll(['drivers_all', 'drivers_auth_data']);
   return { success: true, data: { id: newId, ...payload } };
 }
 
