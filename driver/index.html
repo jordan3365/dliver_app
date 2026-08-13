@@ -582,25 +582,25 @@
     }
 
     document.addEventListener('DOMContentLoaded', async () => {
-      // 초기 GPS 권한 요청 및 위치 서비스 활용 동의
+      // 초기 GPS 권한 요청 및 위치 서비스 활용 동의 (비동기로 백그라운드에서 실행, 속도 지연 방지)
       if (navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(
           (pos) => {
             console.log("GPS 최초 획득 성공:", pos.coords.latitude, pos.coords.longitude);
+            lastUpdateData = { lat: pos.coords.latitude, lng: pos.coords.longitude, time: Date.now() };
           },
           (err) => {
             console.warn("GPS 최초 획득 실패:", err);
-            showDialog('위치 수집 동의 안내', '배송 관제 및 길안내를 위해 스마트폰의 GPS 위치 활용 동의가 반드시 필요합니다. 브라우저 주소창 왼쪽의 자물쇠/설정 아이콘을 눌러 위치 권한을 허용해 주시고 기기의 GPS 위치 서비스를 켜주십시오.');
           },
-          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+          { enableHighAccuracy: false, timeout: 5000, maximumAge: 60000 }
         );
       }
       
       let userStr = localStorage.getItem('authUser');
-      // 로컬 스토리지 비동기 쓰기 지연 대응 (경량화: 100ms 간격 최대 5회 재시도)
+      // 로컬 스토리지 비동기 쓰기 지연 대응 (경량화: 대기시간 단축)
       if (!userStr) {
-        for (let i = 0; i < 5; i++) {
-          await new Promise(r => setTimeout(r, 100));
+        for (let i = 0; i < 3; i++) {
+          await new Promise(r => setTimeout(r, 20));
           userStr = localStorage.getItem('authUser');
           if (userStr) break;
         }
@@ -1151,10 +1151,24 @@
     let lastTargetId = null;
     async function loadDriverData() {
       try {
-        currentData = await api.getDeliveryList(currentUserCourse);
-        currentData.sort((a,b) => (a.order || 99) - (b.order || 99));
-        renderList();
-        await updateMap();
+        const cached = localStorage.getItem('driverDataCache');
+        if (cached && currentData.length === 0) {
+          try {
+            currentData = JSON.parse(cached);
+            renderList();
+            updateMap(); // sync map quickly without awaiting
+          } catch(e) {}
+        }
+
+        const freshData = await api.getDeliveryList(currentUserCourse);
+        freshData.sort((a,b) => (a.order || 99) - (b.order || 99));
+        
+        if (JSON.stringify(currentData) !== JSON.stringify(freshData)) {
+          currentData = freshData;
+          localStorage.setItem('driverDataCache', JSON.stringify(currentData));
+          renderList();
+          await updateMap();
+        }
 
         const pendingItems = currentData.filter(d => d.status !== 'done' && d.status !== 'excluded').sort((a,b) => (a.order||99) - (b.order||99));
         if (pendingItems.length > 0) {
@@ -1313,6 +1327,22 @@
               showToast("목적지에 근접하여 길안내를 자동 종료합니다.");
               speak("목적지에 근접하여 길안내를 종료합니다.");
             } catch(e) { console.warn("Navi window close failed", e); }
+          }
+        }
+
+        // 10m (0.01km) 이내 근접 시 자동으로 배송완료 팝업 띄우기
+        if (dist <= 0.01) {
+          const alertKey = `auto_complete_${nextDest.id}`;
+          if (!sessionStorage.getItem(alertKey)) {
+            sessionStorage.setItem(alertKey, 'true');
+            speak(`${nextDest.name}에 도착했습니다. 화면의 확인 버튼을 눌러 배송 완료를 처리해 주세요.`);
+            showDialog(
+              '✅ 배송지 도착 완료', 
+              `<b style="color:var(--primary); font-size:1.1rem;">${nextDest.name}</b>에 도착했습니다 (10m 이내).<br><br>배송 완료 처리하시겠습니까?`, 
+              true, 
+              () => { window.completeDelivery(nextDest.id); },
+              '배송 완료 처리'
+            );
           }
         }
       }

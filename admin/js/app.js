@@ -488,6 +488,24 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     }
 
+    // Progress Panel Fullscreen
+    const btnFullscreenProgress = document.getElementById('btnFullscreenProgress');
+    const progressCard = document.getElementById('progressCard');
+    if (btnFullscreenProgress && progressCard) {
+      btnFullscreenProgress.addEventListener('click', () => {
+        progressCard.classList.toggle('fullscreen');
+        if(progressCard.classList.contains('fullscreen')) {
+          btnFullscreenProgress.innerHTML = '<i class="fa-solid fa-compress"></i> 원래대로';
+          btnFullscreenProgress.style.background = '#f1f2f6';
+          btnFullscreenProgress.style.color = '#333';
+        } else {
+          btnFullscreenProgress.innerHTML = '<i class="fa-solid fa-expand"></i> 전체보기';
+          btnFullscreenProgress.style.background = 'var(--secondary)';
+          btnFullscreenProgress.style.color = 'white';
+        }
+      });
+    }
+
     // Sidebar Toggle for Mobile/Tablet
     const btnToggleSidebar = document.getElementById('btnToggleSidebar');
     const sidebar = document.querySelector('.sidebar');
@@ -760,16 +778,52 @@ function updateVehicleStatus(data, drivers = []) {
     const sortedItems = [...courseData].sort((a, b) => (a.order || 999) - (b.order || 999));
     const nextItem = sortedItems.find(d => d.status !== 'done');
 
+    // 20m 도착 알림 로직 (관리자 대시보드 팝업 및 음성)
+    if (isLive && nextItem) {
+      const dLat = driverInfo.currentLocation.lat;
+      const dLng = driverInfo.currentLocation.lng;
+      const tLat = parseFloat(nextItem.latitude);
+      const tLng = parseFloat(nextItem.longitude);
+      
+      if (!isNaN(tLat) && !isNaN(tLng)) {
+        const distKm = getDist(dLat, dLng, tLat, tLng);
+        if (distKm <= 0.02) { // 20m 이내
+          const alertKey = `dest_arrival_${course}_${nextItem.id}`;
+          if (!alertedArrivals.has(alertKey)) {
+            alertedArrivals.add(alertKey);
+            showAdminDialog('🚚 배송처 도착 알림', `<b style="color:var(--primary); font-size:1.1rem;">${course}호차</b>가 <b>${nextItem.name}</b>에 곧 도착(20m 이내)합니다.<br><br>하차를 준비해 주세요.`);
+            speak(`${course}호차가, ${nextItem.name}에 곧 도착합니다.`);
+          }
+        }
+      }
+    }
+
     const traffic = getAiTrafficStatus(course);
 
-    // 타임라인 도트 생성
-    let timelineHtml = sortedItems.map((item, idx) => {
-      const dotClass = item.status === 'done' ? 'done' : (item === nextItem ? 'active' : 'pending');
-      const lineClass = item.status === 'done' ? 'done' : (item === nextItem ? 'active' : '');
-      const segLine = idx === 0 ? '' : `<div class="dest-seg-line ${lineClass}"></div>`;
+    // HQ 출발 노드 (프로그래스바 시작점)
+    let timelineHtml = `
+      <div class="dest-seg">
+        <div class="dest-node" title="본사 출발">
+          <div style="font-size:0.6rem; color:#6c5ce7; font-weight:bold; margin-bottom:2px;">출발</div>
+          <div class="tl-dot done" style="--dot-color:#6c5ce7; border-radius:4px;"></div>
+          <div class="tl-label" style="color:#6c5ce7; font-weight:bold;">HQ</div>
+        </div>
+      </div>`;
+
+    // 타임라인 도트 생성 (배송처)
+    timelineHtml += sortedItems.map((item, idx) => {
+      const isDelivering = item.status === 'delivering';
+      const isDone = item.status === 'done';
+      const isActive = (item === nextItem && (isStarted || isDelivering));
+      
+      const dotClass = isDone ? 'done' : (isActive ? 'active' : 'pending');
+      
+      // 기사앱에서 배송출발(delivering)을 클릭하면 경로가 실시간 활성화(active) 되도록 표시
+      const lineClass = isDone ? 'done' : (isActive || isDelivering ? 'active' : '');
+      const segLine = `<div class="dest-seg-line ${lineClass}" style="--line-color: ${color}"></div>`;
       
       let etaLabelHtml = '';
-      if (item.status === 'done') {
+      if (isDone) {
         etaLabelHtml = `<div style="font-size:0.6rem; color:#10b981; margin-bottom:2px;">완료</div>`;
       } else {
         const pendingIdx = sortedItems.filter(x => x.status !== 'done').indexOf(item);
@@ -782,7 +836,7 @@ function updateVehicleStatus(data, drivers = []) {
       return `
         <div class="dest-seg">
           ${segLine}
-          <div class="dest-node" title="${item.name} (${item.status === 'done' ? '완료' : '대기'})">
+          <div class="dest-node" title="${item.name} (${item.status === 'done' ? '완료' : (item.status === 'delivering' ? '이동중' : '대기')})">
             ${etaLabelHtml}
             <div class="tl-dot ${dotClass}" style="--dot-color:${color}"></div>
             <div class="tl-label">${item.order || idx + 1}</div>
@@ -809,11 +863,20 @@ function updateVehicleStatus(data, drivers = []) {
         </div>`;
     }
 
-    // ETA 계산 (남은 건수 x 15분)
-    let etaStr = '';
+    // ETA 계산
+    let nextEtaStr = '';
+    if (nextItem) {
+      const pendingIdx = sortedItems.filter(x => x.status !== 'done').indexOf(nextItem);
+      const minsToAdd = (pendingIdx * 15) + traffic.delay;
+      const etaDt = new Date(Date.now() + minsToAdd * 60000);
+      nextEtaStr = etaDt.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+    }
+    
+    let hqEtaStr = '';
     if (!isAllDone && remaining > 0) {
-      const etaDt = new Date(Date.now() + remaining * 15 * 60000);
-      etaStr = etaDt.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+      const hqMins = (remaining * 15) + 15 + traffic.delay;
+      const hqDt = new Date(Date.now() + hqMins * 60000);
+      hqEtaStr = hqDt.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
     }
 
     cardsHtml += `
@@ -837,10 +900,10 @@ function updateVehicleStatus(data, drivers = []) {
                            background:${statusBg}; color:white; font-weight:700;">${statusText}</span>
               ${isLive && !isHqArrived ? '<span style="font-size:0.7rem; background:#dcfce7; color:#16a34a; padding:2px 7px; border-radius:20px; font-weight:700;"><i class="fa-solid fa-signal"></i> LIVE</span>' : ''}
             </div>
-            <div style="font-size:0.82rem; color:var(--text-muted); margin-top:3px;">
+            <div style="font-size:0.82rem; color:var(--text-muted); margin-top:5px; line-height:1.4;">
               ${course}호차
-              ${nextItem ? `• 다음: <b style="color:${color};">${nextItem.name}</b>` : ''}
-              ${etaStr ? `• ETA <b>${etaStr}</b>` : ''}
+              ${nextItem ? ` • 다음: <b style="color:${color};">${nextItem.name}</b> (ETA <b>${nextEtaStr}</b>)` : ''}
+              ${hqEtaStr ? `<br><span style="color:#6c5ce7; font-weight:bold;"><i class="fa-solid fa-building"></i> HQ 최종도착예정시간: ${hqEtaStr}</span>` : ''}
             </div>
           </div>
 
@@ -2296,3 +2359,32 @@ function scheduleMidnightReset() {
 
 // 스크립트 로드 시 즉시 스케줄러 실행
 scheduleMidnightReset();
+
+window.showAdminDialog = function(title, msg, isConfirm = false, onConfirm = null) {
+  const modal = document.getElementById('adminDialogModal');
+  if (!modal) { alert(msg); return; }
+  
+  document.getElementById('adminDialogTitle').innerHTML = title;
+  document.getElementById('adminDialogMsg').innerHTML = msg;
+  
+  const btnCancel = document.getElementById('adminDialogCancel');
+  const btnConfirm = document.getElementById('adminDialogConfirm');
+  
+  btnCancel.style.display = isConfirm ? 'inline-block' : 'none';
+  
+  const newConfirm = btnConfirm.cloneNode(true);
+  btnConfirm.parentNode.replaceChild(newConfirm, btnConfirm);
+  const newCancel = btnCancel.cloneNode(true);
+  btnCancel.parentNode.replaceChild(newCancel, btnCancel);
+  
+  newConfirm.addEventListener('click', () => {
+    modal.classList.remove('active');
+    if (onConfirm) onConfirm();
+  });
+  
+  newCancel.addEventListener('click', () => {
+    modal.classList.remove('active');
+  });
+  
+  modal.classList.add('active');
+};
